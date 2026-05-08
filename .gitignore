@@ -1,0 +1,5 @@
+# Runtime state — these are written to ~/.claude/, not the repo, but
+# guard against accidental copies landing here during local edits.
+.statusline-cols
+.statusline-width-debug.log
+*.log
