@@ -1,0 +1,4 @@
+# Bash scripts MUST keep LF endings on every platform — CRLF breaks them
+# when MSYS2 bash interprets the shebang and parses commands.
+*.sh   text eol=lf
+*.ps1  text eol=lf
