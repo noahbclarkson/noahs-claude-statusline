@@ -268,8 +268,16 @@ colored_prefix+=" "
 visible_len=$(prefix_visible_len "$inc_rate" "$inc_ab" "$inc_par" "$b_max" "$d_max")
 
 # --- Calculate bar width ---
+# Use 95% of the free space (leaves a right-edge margin so the line never runs
+# flush to the terminal edge) and cap the interior at MAX_BAR_LEN cells so the
+# bar stays readable on very wide terminals.
+MAX_BAR_LEN=70
 bar_outer=2  # brackets [ ]
 available=$((cols - visible_len - bar_outer))
+available=$(( available * 95 / 100 ))
+if [ "$available" -gt "$MAX_BAR_LEN" ]; then
+  available=$MAX_BAR_LEN
+fi
 if [ "$available" -lt 4 ]; then
   available=4
 fi
