@@ -11,7 +11,7 @@ Claude Opus 4.7 (1M) │ Github/my-project │ feature-branch*↑2 │ 5h:42% 7d
 - **Model name** — color-coded by family (Opus magenta, Sonnet cyan, Haiku green)
 - **Parent/current dir** — two-tone (parent in dark orange, current in yellow)
 - **Git branch** — with `*` for dirty, `↑N` ahead, `↓N` behind
-- **Rate limits** — 5h and 7d windows when present, color-graded green/yellow/red
+- **Rate limits** — 5h and 7d windows when present, colored on the same smooth green→red gradient as the bar
 - **Context %** — number plus a sub-cell-precision progress bar that grows in eighths
 
 ## Why this exists
@@ -84,7 +84,7 @@ All knobs are at the top of `statusline.sh`:
 
 - **Fallback width** (`STATUSLINE_COLS=120`) — used before the cache is populated, or if the probe ever fails.
 - **Model colors** — the `case "$model_id"` block.
-- **Bar fill thresholds & colors** — the `if [ "$used_int" -lt 50 ]` ladder. Swap the ANSI codes (`\033[92m` etc.) to taste.
+- **Bar & rate-limit colors** — the `grad_color` anchor stops (`stops=(0 80 200 100  …)`, read as `pct R G B`). Move a stop's percentage to shift where green→yellow→orange→red lands, or change its RGB to retint.
 - **Boundary-cell BG** (`bar_empty_bg="\033[48;5;236m"`) — dark gray fill behind the partial-block character so it doesn't look like a gap. Try `233`–`238` for darker/lighter.
 - **Bar character set** — change the `partial_char` table or the `█`/`░` glyphs in the fill/empty loops.
 

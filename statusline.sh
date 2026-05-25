@@ -24,8 +24,6 @@ FG_CYAN="\033[96m"
 FG_YELLOW="\033[93m"
 FG_MAGENTA="\033[95m"
 FG_GREEN="\033[92m"
-FG_RED="\033[91m"
-FG_ORANGE="\033[38;5;208m"
 FG_DARK_ORANGE="\033[38;5;172m"
 
 # Truncate a string to max visible chars, appending … if cut.
@@ -37,6 +35,34 @@ truncate_str() {
   else
     printf '%s…' "${s:0:$((max-1))}"
   fi
+}
+
+# Smooth green→yellow→orange→red gradient for a 0-100 value. Writes a 24-bit
+# truecolor SGR sequence to $grad_result via printf -v, so there's no subshell
+# fork (costly on Windows) per call. Piecewise-linear RGB interpolation across
+# the anchor stops below; they keep the lower range green and ramp to red only
+# near the top, echoing the old discrete thresholds but continuously.
+grad_result=""
+grad_color() {
+  local p=$1
+  [ "$p" -lt 0 ] && p=0
+  [ "$p" -gt 100 ] && p=100
+  # anchor stops: pct R G B
+  local stops=(0 80 200 100  55 222 205 35  80 255 140 20  100 228 55 45)
+  local i p0 r0 g0 b0 p1 r1 g1 b1 span t
+  for ((i=0; i+7 < ${#stops[@]}; i+=4)); do
+    p1=${stops[i+4]}
+    [ "$p" -gt "$p1" ] && continue
+    p0=${stops[i]};   r0=${stops[i+1]}; g0=${stops[i+2]}; b0=${stops[i+3]}
+    r1=${stops[i+5]}; g1=${stops[i+6]}; b1=${stops[i+7]}
+    span=$((p1 - p0)); t=$((p - p0))
+    [ "$span" -le 0 ] && span=1
+    printf -v grad_result '\033[38;2;%d;%d;%dm' \
+      "$(( r0 + (r1 - r0) * t / span ))" \
+      "$(( g0 + (g1 - g0) * t / span ))" \
+      "$(( b0 + (b1 - b0) * t / span ))"
+    return
+  done
 }
 
 # --- Parse all stdin JSON fields in a single jq call (perf: fork is expensive on Windows) ---
@@ -117,15 +143,8 @@ git_suffix="${git_dirty}${git_ab}"
 # --- Context usage ---
 used_int=$(printf '%.0f' "$used_pct" 2>/dev/null || echo 0)
 
-if [ "$used_int" -lt 50 ]; then
-  bar_fill_color="\033[92m"        # green
-elif [ "$used_int" -lt 75 ]; then
-  bar_fill_color="\033[93m"        # yellow
-elif [ "$used_int" -lt 90 ]; then
-  bar_fill_color="\033[38;5;208m"  # orange
-else
-  bar_fill_color="\033[91m"        # red
-fi
+grad_color "$used_int"
+bar_fill_color="$grad_result"
 bar_empty_color="\033[90m"
 bar_empty_bg="\033[48;5;236m"  # dark gray BG used behind the partial-block boundary cell
 
@@ -134,25 +153,15 @@ rate_str=""
 plain_rate=""
 if [ -n "$five_pct_raw" ]; then
   five_int=$(printf '%.0f' "$five_pct_raw")
-  if [ "$five_int" -lt 50 ]; then
-    five_color="$FG_GREEN"
-  elif [ "$five_int" -le 80 ]; then
-    five_color="$FG_YELLOW"
-  else
-    five_color="$FG_RED"
-  fi
+  grad_color "$five_int"
+  five_color="$grad_result"
   rate_str+="${five_color}5h:${five_int}%${RESET}"
   plain_rate+="5h:${five_int}%"
 fi
 if [ -n "$week_pct_raw" ]; then
   week_int=$(printf '%.0f' "$week_pct_raw")
-  if [ "$week_int" -lt 50 ]; then
-    week_color="$FG_GREEN"
-  elif [ "$week_int" -le 80 ]; then
-    week_color="$FG_YELLOW"
-  else
-    week_color="$FG_RED"
-  fi
+  grad_color "$week_int"
+  week_color="$grad_result"
   [ -n "$rate_str" ] && rate_str+=" "
   [ -n "$plain_rate" ] && plain_rate+=" "
   rate_str+="${week_color}7d:${week_int}%${RESET}"
