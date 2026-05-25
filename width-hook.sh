@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Stop hook: caches the current terminal width to ~/.claude/.statusline-cols
-# so the statusline can use it on the next refresh. Re-runs after every
-# agent response, which is how the statusline picks up terminal resizes.
+# Stop hook: caches the current terminal width to a per-session cache file,
+# ~/.claude/.statusline-cols-<session_id>, so the statusline can use it on the
+# next refresh. Keying by session_id stops concurrent Claude Code instances in
+# differently-sized terminals from clobbering one another's width through a
+# single shared file. Re-runs after every agent response, which is also how the
+# statusline picks up terminal resizes.
 #
 # Why PowerShell? On Windows MSYS2 bash, hook subprocesses have no TTY:
 # tput, stty, /dev/tty, $COLUMNS all fail. The Win32 Console API (queried
@@ -10,7 +13,11 @@
 # allocates its own default console. width-probe.ps1 walks the parent
 # process tree, AttachConsole-s each ancestor, and reads the real terminal.
 
-cat >/dev/null 2>&1   # drain Claude Code's JSON event payload off stdin
+# Pull session_id off the JSON payload to key the cache per session.
+input=$(cat)
+session_key=$(printf '%s' "$input" | jq -r '.session_id // ""' 2>/dev/null)
+session_key="${session_key//[^A-Za-z0-9_-]/}"
+[ -z "$session_key" ] && exit 0   # no usable session id — nothing safe to key on
 
 # Resolve the sibling probe script next to this hook, in Windows form for powershell.exe
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,5 +28,5 @@ cols=$(powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
 
 # Sanity check: must be a positive integer in a reasonable range
 if [[ "$cols" =~ ^[0-9]+$ ]] && [ "$cols" -ge 40 ] && [ "$cols" -le 1000 ]; then
-  printf '%s\n' "$cols" > "$HOME/.claude/.statusline-cols"
+  printf '%s\n' "$cols" > "$HOME/.claude/.statusline-cols-$session_key"
 fi

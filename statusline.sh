@@ -3,15 +3,14 @@
 # Claude Code status line script
 # Layout: model | parent/dir | branch[*↑↓] | rate-limits | context% [bar]
 #
-# Width: read from a cache file written by the Stop hook (width-hook.sh),
-# which runs PowerShell to query the real terminal width via the Win32
-# Console API. Falls back to 120 if the cache is missing — happens before
-# the first Stop hook fires in a new session.
+# Width: read from a per-session cache file written by the Stop hook
+# (width-hook.sh), which runs PowerShell to query the real terminal width via
+# the Win32 Console API. The cache is keyed by session_id (read further down,
+# once the JSON has been parsed) so concurrent Claude Code instances in
+# differently-sized terminals never clobber one another's width through a
+# single shared file. Falls back to 120 until this session's first Stop hook
+# fires.
 STATUSLINE_COLS=120
-if [ -r "$HOME/.claude/.statusline-cols" ]; then
-  cached_cols=$(< "$HOME/.claude/.statusline-cols")
-  [[ "$cached_cols" =~ ^[0-9]+$ ]] && STATUSLINE_COLS="$cached_cols"
-fi
 
 input=$(cat)
 
@@ -70,10 +69,21 @@ eval "$(printf '%s' "$input" | jq -r '
   @sh "model_id=\(.model.id // "")",
   @sh "model_display=\(.model.display_name // "Claude")",
   @sh "project_dir=\(.workspace.project_dir // .cwd // "")",
+  @sh "session_id=\(.session_id // "")",
   @sh "used_pct=\(.context_window.used_percentage // 0)",
   @sh "five_pct_raw=\(.rate_limits.five_hour.used_percentage // "")",
   @sh "week_pct_raw=\(.rate_limits.seven_day.used_percentage // "")"
 ' 2>/dev/null)"
+
+# --- Terminal width: read THIS session's cached value (keyed by session_id) ---
+# Sanitize to filename-safe chars. With no usable id, keep the 120 default
+# rather than reading any shared file — a shared read is exactly the
+# cross-instance clobbering this per-session keying exists to prevent.
+session_key="${session_id//[^A-Za-z0-9_-]/}"
+if [ -n "$session_key" ] && [ -r "$HOME/.claude/.statusline-cols-$session_key" ]; then
+  cached_cols=$(< "$HOME/.claude/.statusline-cols-$session_key")
+  [[ "$cached_cols" =~ ^[0-9]+$ ]] && STATUSLINE_COLS="$cached_cols"
+fi
 
 # --- Shorten verbose model display names ---
 model_display="${model_display/ (1M context)/ (1M)}"

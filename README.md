@@ -24,13 +24,13 @@ This repo solves it by walking up the parent process tree from a `Stop` hook, ca
 
 | File | Purpose |
 |---|---|
-| `statusline.sh`   | The statusline itself. Reads cached width from `~/.claude/.statusline-cols`. |
-| `width-hook.sh`   | `Stop` hook entry point. Drains stdin, runs the probe, writes the cache. |
+| `statusline.sh`   | The statusline itself. Reads this session's cached width from `~/.claude/.statusline-cols-<session_id>`. |
+| `width-hook.sh`   | `Stop` hook entry point. Reads `session_id` from stdin, runs the probe, writes the per-session cache. |
 | `width-probe.ps1` | PowerShell probe that walks the process tree to find the real terminal width. |
 
 State files (written at runtime, not in the repo):
 
-- `~/.claude/.statusline-cols` — cached terminal width
+- `~/.claude/.statusline-cols-<session_id>` — cached terminal width, one file per Claude Code session so concurrent instances in different-sized terminals don't overwrite each other's width
 - `~/.claude/.statusline-width-debug.log` — overwritten every probe run, useful when the chain heuristic picks the wrong ancestor
 
 ## Install
