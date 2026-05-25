@@ -19,10 +19,8 @@ RESET="\033[0m"
 BOLD="\033[1m"
 DIM="\033[2m"
 FG_WHITE="\033[97m"
-FG_CYAN="\033[96m"
 FG_YELLOW="\033[93m"
 FG_MAGENTA="\033[95m"
-FG_GREEN="\033[92m"
 FG_DARK_ORANGE="\033[38;5;172m"
 
 # Truncate a string to max visible chars, appending … if cut.
@@ -64,6 +62,24 @@ grad_color() {
   done
 }
 
+# Render $1 with a slight per-character gradient between two RGB endpoints
+# ($2-$4 start, $5-$7 end), written to $grad_text. The emitted SGR codes are
+# zero-width, so this does not change the visible-length math downstream.
+grad_text=""
+model_gradient() {
+  local text="$1" r0=$2 g0=$3 b0=$4 r1=$5 g1=$6 b1=$7
+  local n=${#text} denom i ch r g b out=""
+  denom=$(( n > 1 ? n - 1 : 1 ))
+  for ((i=0; i<n; i++)); do
+    ch=${text:i:1}
+    r=$(( r0 + (r1 - r0) * i / denom ))
+    g=$(( g0 + (g1 - g0) * i / denom ))
+    b=$(( b0 + (b1 - b0) * i / denom ))
+    out+=$'\033'"[38;2;${r};${g};${b}m${ch}"
+  done
+  grad_text="$out"
+}
+
 # --- Parse all stdin JSON fields in a single jq call (perf: fork is expensive on Windows) ---
 eval "$(printf '%s' "$input" | jq -r '
   @sh "model_id=\(.model.id // "")",
@@ -88,12 +104,12 @@ fi
 # --- Shorten verbose model display names ---
 model_display="${model_display/ (1M context)/ (1M)}"
 
-# --- Model with color coding by id ---
+# --- Model name: per-family endpoints for a left-to-right gradient ---
 case "$model_id" in
-  *opus*)   model_color="$FG_MAGENTA" ;;
-  *sonnet*) model_color="$FG_CYAN"    ;;
-  *haiku*)  model_color="$FG_GREEN"   ;;
-  *)        model_color="$FG_CYAN"    ;;
+  *opus*)   model_rgb=(255 95 215  115 100 255) ;;  # magenta → violet-blue
+  *sonnet*) model_rgb=(70 230 235  105 120 255) ;;  # cyan → indigo
+  *haiku*)  model_rgb=(175 240 90   55 205 185) ;;  # lime → teal
+  *)        model_rgb=(70 230 235  105 120 255) ;;
 esac
 
 # --- Project dir: parent/current ---
@@ -254,7 +270,8 @@ done
 # --- Build the colored prefix from chosen segments ---
 sep="${DIM}│${RESET}"
 
-colored_prefix="${BOLD}${model_color}${model_display}${RESET}"
+model_gradient "$model_display" "${model_rgb[@]}"
+colored_prefix="${BOLD}${grad_text}${RESET}"
 colored_prefix+=" ${sep} "
 if [ "$inc_par" = 1 ] && [ -n "$dir_parent" ]; then
   colored_prefix+="${FG_DARK_ORANGE}${dir_parent}${RESET}${DIM}/${RESET}"
@@ -287,18 +304,21 @@ colored_prefix+=" "
 visible_len=$(prefix_visible_len "$inc_rate" "$inc_ab" "$inc_par" "$b_max" "$d_max")
 
 # --- Calculate bar width ---
-# Use 95% of the free space (leaves a right-edge margin so the line never runs
-# flush to the terminal edge) and cap the interior at MAX_BAR_LEN cells so the
-# bar stays readable on very wide terminals.
+# Take 95% of the free space and trim 2 more cells, keeping a clear right-edge
+# margin; cap the interior at MAX_BAR_LEN on wide terminals. Clamp into
+# [1, free space]: subtracting from the free space keeps the bar narrower than
+# the room available (so it can never wrap off the right edge), and the floor
+# stops it ever being empty or negative. With no room at all, drop the bar.
 MAX_BAR_LEN=70
 bar_outer=2  # brackets [ ]
 available=$((cols - visible_len - bar_outer))
-available=$(( available * 95 / 100 ))
-if [ "$available" -gt "$MAX_BAR_LEN" ]; then
-  available=$MAX_BAR_LEN
-fi
-if [ "$available" -lt 4 ]; then
-  available=4
+if [ "$available" -lt 1 ]; then
+  drop_bar=1
+  available=1
+else
+  available=$(( available * 95 / 100 - 2 ))
+  [ "$available" -gt "$MAX_BAR_LEN" ] && available=$MAX_BAR_LEN
+  [ "$available" -lt 1 ] && available=1
 fi
 
 # Sub-cell precision: each cell = 8 eighths, so the boundary cell
