@@ -9,8 +9,8 @@ Claude Opus 4.7 (1M) │ Github/my-project │ feature-branch*↑2 │ 5h:42% 7d
 ```
 
 - **Model name** — a per-character gradient between two family-tinted colors (Opus magenta→violet, Sonnet cyan→indigo, Haiku lime→teal)
-- **Parent/current dir** — two-tone (parent in dark orange, current in yellow)
-- **Git branch** — with `*` for dirty, `↑N` ahead, `↓N` behind
+- **Parent/current dir** — two-tone (parent in dark orange, current in bold yellow)
+- **Git branch** — purple→blue gradient, with `*` for dirty, `↑N` ahead, `↓N` behind
 - **Rate limits** — 5h and 7d windows when present, colored on the same smooth green→red gradient as the bar
 - **Context %** — number plus a sub-cell-precision progress bar that grows in eighths
 

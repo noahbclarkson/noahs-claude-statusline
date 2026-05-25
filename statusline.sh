@@ -20,7 +20,6 @@ BOLD="\033[1m"
 DIM="\033[2m"
 FG_WHITE="\033[97m"
 FG_YELLOW="\033[93m"
-FG_MAGENTA="\033[95m"
 FG_DARK_ORANGE="\033[38;5;172m"
 
 # Truncate a string to max visible chars, appending … if cut.
@@ -62,11 +61,11 @@ grad_color() {
   done
 }
 
-# Render $1 with a slight per-character gradient between two RGB endpoints
-# ($2-$4 start, $5-$7 end), written to $grad_text. The emitted SGR codes are
+# Render $1 with a per-character gradient between two RGB endpoints ($2-$4
+# start, $5-$7 end), written to $grad_text. The emitted SGR codes are
 # zero-width, so this does not change the visible-length math downstream.
 grad_text=""
-model_gradient() {
+gradient_text() {
   local text="$1" r0=$2 g0=$3 b0=$4 r1=$5 g1=$6 b1=$7
   local n=${#text} denom i ch r g b out=""
   denom=$(( n > 1 ? n - 1 : 1 ))
@@ -270,19 +269,20 @@ done
 # --- Build the colored prefix from chosen segments ---
 sep="${DIM}│${RESET}"
 
-model_gradient "$model_display" "${model_rgb[@]}"
+gradient_text "$model_display" "${model_rgb[@]}"
 colored_prefix="${BOLD}${grad_text}${RESET}"
 colored_prefix+=" ${sep} "
 if [ "$inc_par" = 1 ] && [ -n "$dir_parent" ]; then
   colored_prefix+="${FG_DARK_ORANGE}${dir_parent}${RESET}${DIM}/${RESET}"
 fi
 dir_show=$(truncate_str "${dir_current:-unknown}" "$d_max")
-colored_prefix+="${FG_YELLOW}${dir_show}${RESET}"
+colored_prefix+="${BOLD}${FG_YELLOW}${dir_show}${RESET}"
 
 if [ -n "$branch" ]; then
   colored_prefix+=" ${sep} "
   branch_show=$(truncate_str "$branch" "$b_max")
-  colored_prefix+="${FG_MAGENTA}${branch_show}${RESET}"
+  gradient_text "$branch_show" 175 90 245  70 140 255
+  colored_prefix+="${grad_text}${RESET}"
   [ -n "$git_dirty" ] && colored_prefix+="${DIM}${git_dirty}${RESET}"
   if [ "$inc_ab" = 1 ] && [ -n "$git_ab" ]; then
     colored_prefix+="${DIM}${git_ab}${RESET}"
