@@ -76,7 +76,23 @@ State files (written at runtime, not in the repo):
 - PowerShell 5.1+ (built-in)
 - `jq` and `git` on `PATH`
 
-If you're on macOS or Linux, the width-probe layer isn't needed — the statusline can read `tput cols` directly. This repo doesn't currently include that path; PRs welcome.
+## Linux
+
+On Linux, use `statusline-linux.sh` instead of `statusline.sh` — and skip the `Stop` hook, `width-hook.sh`, and `width-probe.ps1` entirely. The Windows width-probe layer isn't needed.
+
+The statusline subprocess still has no controlling terminal of its own (`$COLUMNS` is empty and `/dev/tty` fails), but an ancestor process — the shell or terminal emulator — still holds an fd on the real pts, whose live window size the kernel exposes. `statusline-linux.sh` walks up `/proc` (via the ppid in each `/proc/PID/stat`), checks fds `0/1/2/255` of each ancestor for a `/dev/pts/*` device, and reads its size with `stty size`. That's a few microseconds of `/proc` reads, so unlike the PowerShell probe it runs inline on every render — no hook, no per-session cache file.
+
+Wire it into `~/.claude/settings.json` with just the `statusLine` block (no `hooks`):
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "bash /path/to/noahs-claude-statusline/statusline-linux.sh"
+  }
+}
+```
+
+Requires `jq` and `git` on `PATH`. Falls back to a width of 120 if no pts-holding ancestor is found.
 
 ## Customization
 
