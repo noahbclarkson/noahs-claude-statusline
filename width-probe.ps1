@@ -9,8 +9,13 @@
 
 $ErrorActionPreference = 'SilentlyContinue'
 $log = Join-Path $env:USERPROFILE '.claude\.statusline-width-debug.log'
-function Log($msg) { $msg | Out-File -FilePath $log -Append -Encoding utf8 }
-"===== $(Get-Date -Format o) =====" | Out-File -FilePath $log -Encoding utf8
+# Buffer the log in memory and flush once at the end. Out-File -Append reopens
+# the file per call (~20-40ms on Windows PowerShell); this script logs ~25
+# lines, so appending line-by-line cost more than the actual probing did.
+$logLines = [System.Collections.Generic.List[string]]::new()
+function Log($msg) { [void]$logLines.Add([string]$msg) }
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
+Log "===== $(Get-Date -Format o) ====="
 
 Add-Type -Name K -Namespace Win32 -MemberDefinition @'
 [DllImport("kernel32.dll", SetLastError=true)] public static extern bool AttachConsole(uint dwProcessId);
@@ -31,11 +36,22 @@ Add-Type -Name K -Namespace Win32 -MemberDefinition @'
 
 Log "baseline Host.WindowSize.Width = $($Host.UI.RawUI.WindowSize.Width)"
 
+# One CIM query for the whole process table, indexed by PID. Each filtered
+# Get-CimInstance costs ~150ms on Windows, and the walk below needs a parent
+# and a name for every ancestor — ~20 queries, ~3s, which is most of this
+# script's runtime. A single unfiltered snapshot of all ~460 processes costs
+# ~180ms and answers every lookup from memory.
+$procTable = @{}
+Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, Name -ErrorAction SilentlyContinue |
+  ForEach-Object { $procTable[[int]$_.ProcessId] = $_ }
+
 function Get-ParentPid($processId) {
-  (Get-CimInstance Win32_Process -Filter "ProcessId=$processId" -ErrorAction SilentlyContinue).ParentProcessId
+  $p = $procTable[[int]$processId]
+  if ($p) { $p.ParentProcessId }
 }
 function Get-ProcName($processId) {
-  (Get-CimInstance Win32_Process -Filter "ProcessId=$processId" -ErrorAction SilentlyContinue).Name
+  $p = $procTable[[int]$processId]
+  if ($p) { $p.Name }
 }
 
 # Constants for CreateFile
@@ -100,7 +116,10 @@ for ($i = 0; $i -lt 12; $i++) {
 
 if ($bestWidth) {
   Log "best width = $bestWidth"
-  Write-Output $bestWidth
 } else {
   Log "no width found"
 }
+Log "elapsed = $($sw.ElapsedMilliseconds)ms"
+$logLines | Out-File -FilePath $log -Encoding utf8
+
+if ($bestWidth) { Write-Output $bestWidth }
