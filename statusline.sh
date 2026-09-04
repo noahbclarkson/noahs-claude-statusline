@@ -87,7 +87,9 @@ eval "$(printf '%s' "$input" | jq -r '
   @sh "session_id=\(.session_id // "")",
   @sh "used_pct=\(.context_window.used_percentage // 0)",
   @sh "five_pct_raw=\(.rate_limits.five_hour.used_percentage // "")",
-  @sh "week_pct_raw=\(.rate_limits.seven_day.used_percentage // "")"
+  @sh "week_pct_raw=\(.rate_limits.seven_day.used_percentage // "")",
+  @sh "five_reset_raw=\(.rate_limits.five_hour.resets_at // "")",
+  @sh "week_reset_raw=\(.rate_limits.seven_day.resets_at // "")"
 ' 2>/dev/null)"
 
 # --- Terminal width: read THIS session's cached value (keyed by session_id) ---
@@ -174,14 +176,46 @@ bar_empty_color="\033[90m"
 bar_empty_bg="\033[48;5;236m"  # dark gray BG used behind the partial-block boundary cell
 
 # --- Rate limits ---
+# used_percentage is refreshed by the host on its own cadence and can sit
+# unchanged for minutes at a time, which makes a window that is already at its
+# ceiling look frozen. resets_at is the one datum that is live on every render,
+# so once a window is high enough to matter, show how long until it clears.
+RESET_COUNTDOWN_THRESHOLD=80
+
+# Sets $reset_str to " ·4d2h" / " ·3h56m" / " ·47m" for the window ending at
+# epoch $1 with usage $2, or "" when the window is still quiet, the timestamp
+# is absent or malformed, or the reset has already passed. Kept out of the
+# segment below the threshold so the common case stays terse.
+reset_str=""
+fmt_reset() {
+  local epoch=$1 pct=$2 secs d h m
+  reset_str=""
+  [ -z "$epoch" ] && return
+  [[ "$epoch" =~ ^[0-9]+$ ]] || return
+  [ "$pct" -lt "$RESET_COUNTDOWN_THRESHOLD" ] && return
+  secs=$(( epoch - $(date +%s) ))
+  [ "$secs" -le 0 ] && return
+  d=$(( secs / 86400 ))
+  h=$(( secs % 86400 / 3600 ))
+  m=$(( secs % 3600 / 60 ))
+  if [ "$d" -gt 0 ]; then
+    reset_str=" ·${d}d${h}h"
+  elif [ "$h" -gt 0 ]; then
+    reset_str=" ·${h}h${m}m"
+  else
+    reset_str=" ·${m}m"
+  fi
+}
+
 rate_str=""
 plain_rate=""
 if [ -n "$five_pct_raw" ]; then
   five_int=$(printf '%.0f' "$five_pct_raw")
   grad_color "$five_int"
   five_color="$grad_result"
-  rate_str+="${five_color}5h:${five_int}%${RESET}"
-  plain_rate+="5h:${five_int}%"
+  fmt_reset "$five_reset_raw" "$five_int"
+  rate_str+="${five_color}5h:${five_int}%${reset_str}${RESET}"
+  plain_rate+="5h:${five_int}%${reset_str}"
 fi
 if [ -n "$week_pct_raw" ]; then
   week_int=$(printf '%.0f' "$week_pct_raw")
@@ -189,8 +223,9 @@ if [ -n "$week_pct_raw" ]; then
   week_color="$grad_result"
   [ -n "$rate_str" ] && rate_str+=" "
   [ -n "$plain_rate" ] && plain_rate+=" "
-  rate_str+="${week_color}7d:${week_int}%${RESET}"
-  plain_rate+="7d:${week_int}%"
+  fmt_reset "$week_reset_raw" "$week_int"
+  rate_str+="${week_color}7d:${week_int}%${reset_str}${RESET}"
+  plain_rate+="7d:${week_int}%${reset_str}"
 fi
 
 # --- Decide which segments to keep so prefix + bar fit within $cols ---
