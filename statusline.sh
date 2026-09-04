@@ -15,12 +15,16 @@ STATUSLINE_COLS=120
 input=$(cat)
 
 # --- ANSI color helpers ---
-RESET="\033[0m"
-BOLD="\033[1m"
-DIM="\033[2m"
-FG_WHITE="\033[97m"
-FG_YELLOW="\033[93m"
-FG_DARK_ORANGE="\033[38;5;172m"
+# Real ESC bytes rather than "\033" strings, so the final printf can use %s
+# instead of %b. %b would also expand backslash escapes in the *data* — a
+# branch or directory name containing \t renders as a tab and silently breaks
+# the visible-length math the layout depends on.
+RESET=$'\033[0m'
+BOLD=$'\033[1m'
+DIM=$'\033[2m'
+FG_WHITE=$'\033[97m'
+FG_YELLOW=$'\033[93m'
+FG_DARK_ORANGE=$'\033[38;5;172m'
 
 # Truncate a string to max visible chars, appending … if cut.
 # Bash substring expansion is character-based under a UTF-8 locale.
@@ -142,8 +146,13 @@ fi
 git_dirty=""
 git_ab=""
 git_ab_cells=0   # visible-cell count of git_ab (arrows are 1 cell but 3 bytes in UTF-8)
-if [ -n "$in_git_repo" ]; then
+if [ -n "$in_git_repo" ] && command -v git >/dev/null 2>&1; then
   branch=$(git -C "$project_dir" --no-optional-locks branch --show-current 2>/dev/null)
+  # Detached HEAD (bisect, a checked-out tag, a rebase in flight) has no branch
+  # name; the short SHA keeps the segment useful instead of blanking it.
+  if [ -z "$branch" ]; then
+    branch=$(git -C "$project_dir" --no-optional-locks rev-parse --short HEAD 2>/dev/null)
+  fi
   if [ -n "$branch" ]; then
     if [ -n "$(git -C "$project_dir" --no-optional-locks status --porcelain 2>/dev/null)" ]; then
       git_dirty="*"
@@ -167,24 +176,28 @@ git_suffix="${git_dirty}${git_ab}"
 
 # --- Context usage ---
 used_int=$(printf '%.0f' "$used_pct" 2>/dev/null || echo 0)
+# A host reporting over 100% would make filled_eighths exceed the bar's own
+# width further down, pushing the rendered bar past $cols and wrapping the line.
+[ "$used_int" -lt 0 ] 2>/dev/null && used_int=0
+[ "$used_int" -gt 100 ] 2>/dev/null && used_int=100
 
 grad_color "$used_int"
 bar_fill_color="$grad_result"
-bar_empty_color="\033[90m"
-bar_empty_bg="\033[48;5;236m"  # dark gray BG used behind the partial-block boundary cell
+bar_empty_color=$'[90m'
+bar_empty_bg=$'[48;5;236m'  # dark gray BG used behind the partial-block boundary cell
 
 # --- Rate limits ---
 rate_str=""
 plain_rate=""
-if [ -n "$five_pct_raw" ]; then
-  five_int=$(printf '%.0f' "$five_pct_raw")
+# A non-numeric percentage fails the conversion and drops its segment, rather
+# than feeding garbage into grad_color's arithmetic or reporting a bare 0%.
+if [ -n "$five_pct_raw" ] && five_int=$(printf '%.0f' "$five_pct_raw" 2>/dev/null); then
   grad_color "$five_int"
   five_color="$grad_result"
   rate_str+="${five_color}5h:${five_int}%${RESET}"
   plain_rate+="5h:${five_int}%"
 fi
-if [ -n "$week_pct_raw" ]; then
-  week_int=$(printf '%.0f' "$week_pct_raw")
+if [ -n "$week_pct_raw" ] && week_int=$(printf '%.0f' "$week_pct_raw" 2>/dev/null); then
   grad_color "$week_int"
   week_color="$grad_result"
   [ -n "$rate_str" ] && rate_str+=" "
@@ -328,6 +341,7 @@ filled_eighths=$(( total_eighths * used_int / 100 ))
 full_cells=$(( filled_eighths / 8 ))
 remainder=$(( filled_eighths % 8 ))
 empty=$(( available - full_cells - (remainder > 0 ? 1 : 0) ))
+[ "$empty" -lt 0 ] && empty=0
 
 partial_char=""
 case "$remainder" in
@@ -363,4 +377,4 @@ else
   bar="${DIM}[${RESET}${bar_fill_color}${bar_filled}${RESET}${partial_segment}${bar_empty_color}${bar_empty_str}${RESET}${DIM}]${RESET}"
 fi
 
-printf "%b%b\n" "$colored_prefix" "$bar"
+printf '%s%s\n' "$colored_prefix" "$bar"
