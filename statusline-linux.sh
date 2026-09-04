@@ -62,19 +62,47 @@ grad_color() {
   done
 }
 
-# Render $1 with a per-character gradient between two RGB endpoints ($2-$4
-# start, $5-$7 end), written to $grad_text. The emitted SGR codes are
-# zero-width, so this does not change the visible-length math downstream.
+# Render $1 with a per-character gradient across the RGB stops given as the
+# remaining args, as r g b triples. Two stops interpolate straight from one to
+# the other; more stops split the text into equal-length segments and
+# interpolate within each, so a name can travel through several hues. Written
+# to $grad_text. The emitted SGR codes are zero-width, so this does not change
+# the visible-length math downstream.
 grad_text=""
 gradient_text() {
-  local text="$1" r0=$2 g0=$3 b0=$4 r1=$5 g1=$6 b1=$7
-  local n=${#text} denom i ch r g b out=""
-  denom=$(( n > 1 ? n - 1 : 1 ))
+  local text="$1"; shift
+  local stops=("$@")
+  local n=${#text} num_stops=$(( $# / 3 ))
+
+  # Nothing to paint, or too few stops to interpolate between: pass through.
+  [ "$n" -le 0 ] && { grad_text=""; return; }
+  [ "$num_stops" -lt 2 ] && { grad_text="$text"; return; }
+
+  local segs=$(( num_stops - 1 ))
+  local denom=$(( n > 1 ? n - 1 : 1 ))
+  local out="" i ch r g b seg seg_start seg_end span t i0 i1 r0 g0 b0 r1 g1 b1
+
   for ((i=0; i<n; i++)); do
     ch=${text:i:1}
-    r=$(( r0 + (r1 - r0) * i / denom ))
-    g=$(( g0 + (g1 - g0) * i / denom ))
-    b=$(( b0 + (b1 - b0) * i / denom ))
+    # Which segment character i falls in, and how far along that segment it
+    # sits. Boundaries are computed from the same denom the character index
+    # runs on, so segments tile the string exactly with no rounding gap.
+    seg=$(( i * segs / denom ))
+    [ "$seg" -ge "$segs" ] && seg=$(( segs - 1 ))
+    seg_start=$(( seg * denom / segs ))
+    seg_end=$(( (seg + 1) * denom / segs ))
+    span=$(( seg_end - seg_start ))
+    [ "$span" -le 0 ] && span=1
+    t=$(( i - seg_start ))
+    [ "$t" -lt 0 ] && t=0
+    [ "$t" -gt "$span" ] && t=$span
+
+    i0=$(( seg * 3 )); i1=$(( i0 + 3 ))
+    r0=${stops[i0]}; g0=${stops[i0+1]}; b0=${stops[i0+2]}
+    r1=${stops[i1]}; g1=${stops[i1+1]}; b1=${stops[i1+2]}
+    r=$(( r0 + (r1 - r0) * t / span ))
+    g=$(( g0 + (g1 - g0) * t / span ))
+    b=$(( b0 + (b1 - b0) * t / span ))
     out+=$'\033'"[38;2;${r};${g};${b}m${ch}"
   done
   grad_text="$out"
