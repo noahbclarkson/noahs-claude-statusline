@@ -12,7 +12,7 @@ Claude Opus 4.7 (1M) │ Github/my-project │ feature-branch*↑2 │ 5h:42% 7d
 - **Parent/current dir** — two-tone (parent in dark orange, current in bold yellow)
 - **Git branch** — purple→blue gradient, with `*` for dirty, `↑N` ahead, `↓N` behind
 - **Rate limits** — 5h and 7d windows when present, colored on the same smooth green→red gradient as the bar
-- **Context %** — number plus a sub-cell-precision progress bar that grows in eighths
+- **Context %** — number plus a sub-cell-precision progress bar that grows in eighths, plus the absolute token counts (`47%(340k/1M)`) when the payload carries them — the percentage says how full the window is, the pair says how big it is. The counts are the first thing dropped when the terminal gets narrow.
 
 ## Why this exists
 

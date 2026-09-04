@@ -86,6 +86,8 @@ eval "$(printf '%s' "$input" | jq -r '
   @sh "project_dir=\(.workspace.project_dir // .cwd // "")",
   @sh "session_id=\(.session_id // "")",
   @sh "used_pct=\(.context_window.used_percentage // 0)",
+  @sh "used_tokens_raw=\(.context_window.total_input_tokens // .context_window.used_tokens // "")",
+  @sh "total_tokens_raw=\(.context_window.context_window_size // .context_window.total_tokens // "")",
   @sh "five_pct_raw=\(.rate_limits.five_hour.used_percentage // "")",
   @sh "week_pct_raw=\(.rate_limits.seven_day.used_percentage // "")"
 ' 2>/dev/null)"
@@ -173,6 +175,30 @@ bar_fill_color="$grad_result"
 bar_empty_color="\033[90m"
 bar_empty_bg="\033[48;5;236m"  # dark gray BG used behind the partial-block boundary cell
 
+# Absolute token counts, abbreviated so the pair stays short enough to sit
+# inline: 340000 -> 340k, 1000000 -> 1M. The percentage alone says how full the
+# window is but not how big it is, which is what distinguishes a 200k window
+# from a 1M one at the same fill. The counts come from context_window's
+# total_input_tokens and context_window_size, with used_tokens/total_tokens
+# kept as fallbacks for hosts that name them that way.
+format_token_k() {
+  local num=$1
+  if [ "$num" -ge 1000000 ]; then
+    printf '%dM' "$(( num / 1000000 ))"
+  elif [ "$num" -ge 1000 ]; then
+    printf '%dk' "$(( num / 1000 ))"
+  else
+    printf '%d' "$num"
+  fi
+}
+
+# Empty unless the host sends both counts, so a payload without them renders
+# exactly as before.
+token_str=""
+if [ -n "$used_tokens_raw" ] && [ -n "$total_tokens_raw" ] && [ "$total_tokens_raw" -gt 0 ] 2>/dev/null; then
+  token_str="$(format_token_k "$used_tokens_raw")/$(format_token_k "$total_tokens_raw")"
+fi
+
 # --- Rate limits ---
 rate_str=""
 plain_rate=""
@@ -195,12 +221,13 @@ fi
 
 # --- Decide which segments to keep so prefix + bar fit within $cols ---
 # Degradation order (least essential dropped first):
-#   1. rate-limits segment
-#   2. git ahead/behind suffix (keep dirty *)
-#   3. parent directory
-#   4. truncate branch to 14, then 8
-#   5. truncate current dir to 18, then 10
-#   6. drop the bar entirely
+#   1. token fraction after the context percentage
+#   2. rate-limits segment
+#   3. git ahead/behind suffix (keep dirty *)
+#   4. parent directory
+#   5. truncate branch to 14, then 8
+#   6. truncate current dir to 18, then 10
+#   7. drop the bar entirely
 cols=$STATUSLINE_COLS
 TARGET_BAR=8           # min bar interior cells we want
 SEP_LEN=3              # " │ " visible width
@@ -210,9 +237,9 @@ SEP_LEN=3              # " │ " visible width
 # cells (truncate_str produces exactly that many visible cells via …). The
 # only multi-byte fields handled specially are the SEP_LEN constant and
 # git_ab_cells, both pre-computed in cells rather than bytes.
-# args: include_rate include_ab include_parent branch_max dir_max
+# args: include_token include_rate include_ab include_parent branch_max dir_max
 prefix_visible_len() {
-  local inc_rate=$1 inc_ab=$2 inc_par=$3 b_max=$4 d_max=$5
+  local inc_token=$1 inc_rate=$2 inc_ab=$3 inc_par=$4 b_max=$5 d_max=$6
   local n=${#model_display}
   n=$((n + SEP_LEN))
   if [ "$inc_par" = 1 ] && [ -n "$dir_parent" ]; then
@@ -233,20 +260,26 @@ prefix_visible_len() {
   if [ "$inc_rate" = 1 ] && [ -n "$plain_rate" ]; then
     n=$((n + SEP_LEN + ${#plain_rate}))
   fi
-  n=$((n + SEP_LEN + ${#used_int} + 2))   # " │ N% "
+  n=$((n + SEP_LEN + ${#used_int} + 1))   # " │ N%"
+  if [ "$inc_token" = 1 ] && [ -n "$token_str" ]; then
+    n=$((n + ${#token_str} + 2))          # "(used/total)"
+  fi
+  n=$((n + 1))                            # trailing space before the bar
   echo "$n"
 }
 
-inc_rate=1; inc_ab=1; inc_par=1
+inc_token=1; inc_rate=1; inc_ab=1; inc_par=1
 b_max=999; d_max=999
 drop_bar=0
 budget=$((cols - 2 - TARGET_BAR))   # 2 for brackets
 
 while :; do
-  len=$(prefix_visible_len "$inc_rate" "$inc_ab" "$inc_par" "$b_max" "$d_max")
+  len=$(prefix_visible_len "$inc_token" "$inc_rate" "$inc_ab" "$inc_par" "$b_max" "$d_max")
   [ "$len" -le "$budget" ] && break
 
-  if [ "$inc_rate" = 1 ] && [ -n "$plain_rate" ]; then
+  if [ "$inc_token" = 1 ] && [ -n "$token_str" ]; then
+    inc_token=0
+  elif [ "$inc_rate" = 1 ] && [ -n "$plain_rate" ]; then
     inc_rate=0
   elif [ "$inc_ab" = 1 ] && [ -n "$git_ab" ]; then
     inc_ab=0
@@ -296,12 +329,15 @@ fi
 
 colored_prefix+=" ${sep} "
 colored_prefix+="${FG_WHITE}${used_int}%${RESET}"
+if [ "$inc_token" = 1 ] && [ -n "$token_str" ]; then
+  colored_prefix+="${DIM}(${token_str})${RESET}"
+fi
 colored_prefix+=" "
 
 # Visible length in cells — matches what we used during the budget loop, so
 # bar sizing stays consistent (avoids the byte-vs-cell discrepancy that
 # stripping ANSI + ${#stripped} would introduce for │ separators and arrows).
-visible_len=$(prefix_visible_len "$inc_rate" "$inc_ab" "$inc_par" "$b_max" "$d_max")
+visible_len=$(prefix_visible_len "$inc_token" "$inc_rate" "$inc_ab" "$inc_par" "$b_max" "$d_max")
 
 # --- Calculate bar width ---
 # Take 95% of the free space and trim 2 more cells, keeping a clear right-edge
