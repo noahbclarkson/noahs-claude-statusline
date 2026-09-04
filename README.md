@@ -27,6 +27,7 @@ This repo solves it by walking up the parent process tree from a `Stop` hook, ca
 | `statusline.sh`   | The statusline itself. Reads this session's cached width from `~/.claude/.statusline-cols-<session_id>`. |
 | `width-hook.sh`   | `Stop` hook entry point. Reads `session_id` from stdin, runs the probe, writes the per-session cache. |
 | `width-probe.ps1` | PowerShell probe that walks the process tree to find the real terminal width. |
+| `test-statusline.sh` | Visual harness. Renders fixed payloads so the color ramps, the sub-cell bar boundary and the narrow-terminal degradation can be checked without waiting for a real session to reach those states. |
 
 State files (written at runtime, not in the repo):
 
