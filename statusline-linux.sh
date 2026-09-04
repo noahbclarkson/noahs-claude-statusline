@@ -84,7 +84,7 @@ gradient_text() {
 eval "$(printf '%s' "$input" | jq -r '
   @sh "model_id=\(.model.id // "")",
   @sh "model_display=\(.model.display_name // "Claude")",
-  @sh "project_dir=\(.workspace.project_dir // .cwd // "")",
+  @sh "project_dir=\(.workspace.current_dir // .cwd // .workspace.project_dir // "")",
   @sh "session_id=\(.session_id // "")",
   @sh "used_pct=\(.context_window.used_percentage // 0)",
   @sh "five_pct_raw=\(.rate_limits.five_hour.used_percentage // "")",
@@ -127,7 +127,11 @@ case "$model_id" in
 esac
 
 # --- Project dir: parent/current ---
+# Claude Code sends Windows paths with backslashes ("C:\Users\me\proj"), which
+# basename and dirname split inconsistently. Normalising to forward slashes
+# first costs nothing on a POSIX path, where there are none to replace.
 if [ -n "$project_dir" ]; then
+  project_dir="${project_dir//\\//}"
   dir_current=$(basename "$project_dir")
   dir_parent=$(basename "$(dirname "$project_dir")")
   dir_display="$dir_parent/$dir_current"
