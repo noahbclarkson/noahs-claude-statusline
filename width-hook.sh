@@ -23,7 +23,13 @@ session_key="${session_key//[^A-Za-z0-9_-]/}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PS_SCRIPT_WIN=$(cygpath -w "$SCRIPT_DIR/width-probe.ps1" 2>/dev/null || echo "$SCRIPT_DIR/width-probe.ps1")
 
-cols=$(powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+# Hard timeout: width-probe.ps1's Get-CimInstance (WMI) call and its
+# AttachConsole/GetConsoleScreenBufferInfo walk can both block indefinitely
+# on Windows (a stalled WMI repo, or an ancestor console frozen by
+# QuickEdit/Mark-mode text selection). Without a timeout here, a stall in
+# PowerShell wedges this Stop hook forever. `timeout` is coreutils, bundled
+# with git-bash/MSYS2.
+cols=$(timeout 5s powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
   -File "$PS_SCRIPT_WIN" 2>/dev/null | tr -d '\r\n ')
 
 # Sanity check: must be a positive integer in a reasonable range
