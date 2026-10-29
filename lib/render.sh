@@ -4,9 +4,10 @@
 #   statusline.sh        Windows (Git Bash / MSYS2): reads the width the Stop hook cached
 #
 # Each entry script defines find_cols, which sets STATUSLINE_COLS when it can
-# find the terminal's width, then sources this file. Sourcing costs no fork.
+# find the terminal's width, and $here, its own folder, then sources this
+# file. Sourcing costs no fork.
 #
-# Layout: model | parent/dir | branch[*↑↓] | rate-limits | context% [bar]
+# Layout: [account |] model | parent/dir | branch[*↑↓] | rate-limits | context% [bar]
 STATUSLINE_COLS=120
 
 input=$(cat)
@@ -80,16 +81,54 @@ gradient_text() {
   grad_text="$out"
 }
 
+# --- Accounts (optional): which Claude Code profile this session runs under ---
+# A config file outside this repo names each profile (CLAUDE_CONFIG_DIR) with a
+# label and colour, and says whether to log usage; see config.example.json.
+# Without one there is no account segment and no usage logging. The same jq
+# call as the payload reads it, so it costs no extra process.
+statusline_config="${CLAUDE_STATUSLINE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-statusline/config.json}"
+
 # --- Parse all stdin JSON fields in a single jq call (perf: fork is expensive on Windows) ---
-eval "$(printf '%s' "$input" | jq -r '
+# The account is the one whose config folder holds this session's transcript
+# (matched on the folder's name, so Windows backslash paths work too), else the
+# one at CLAUDE_CONFIG_DIR, else the one at ~/.claude.
+jq_program='
+  def norm: gsub("\\\\"; "/") | sub("/+$"; "");
+  def base: split("/") | last;
+  (($cfg[0].accounts? // []) | map(. + {dir: ((.configDir // "") | sub("^~"; $home) | norm)})) as $accounts
+  | ((.transcript_path // "") | norm) as $tp
+  | (($ENV.CLAUDE_CONFIG_DIR // "") | sub("^~"; $home) | norm) as $env_dir
+  | ((if $tp != "" then
+        first($accounts[] | select(.dir != "") | (.dir | base) as $b | select($tp | contains("/" + $b + "/")))
+      else
+        first($accounts[] | select(.dir == (if $env_dir != "" then $env_dir else ($home | norm) + "/.claude" end)))
+      end) // null) as $acct
+  |
   @sh "model_id=\(.model.id // "")",
   @sh "model_display=\(.model.display_name // "Claude")",
   @sh "project_dir=\(.workspace.current_dir // .cwd // .workspace.project_dir // "")",
   @sh "session_id=\(.session_id // "")",
   @sh "used_pct=\(.context_window.used_percentage // 0)",
   @sh "five_pct_raw=\(.rate_limits.five_hour.used_percentage // "")",
-  @sh "week_pct_raw=\(.rate_limits.seven_day.used_percentage // "")"
-' 2>/dev/null)"
+  @sh "five_reset_raw=\(.rate_limits.five_hour.resets_at // "")",
+  @sh "week_pct_raw=\(.rate_limits.seven_day.used_percentage // "")",
+  @sh "week_reset_raw=\(.rate_limits.seven_day.resets_at // "")",
+  @sh "account=\($acct.label // "")",
+  @sh "account_id=\($acct.id // "")",
+  @sh "account_dir=\($acct.dir // "")",
+  @sh "account_rgb=\(($acct.color // []) | map(tostring) | join(";"))",
+  @sh "usage_log=\(if ($cfg[0].usage.log? // false) == true then "1" else "" end)"
+'
+parsed=""
+if [ -r "$statusline_config" ]; then
+  parsed=$(printf '%s' "$input" | jq -r --arg home "$HOME" --slurpfile cfg "$statusline_config" "$jq_program" 2>/dev/null)
+fi
+# No config, or one jq can't read: draw the line without accounts rather than
+# not at all.
+if [ -z "$parsed" ]; then
+  parsed=$(printf '%s' "$input" | jq -r --arg home "$HOME" --argjson cfg '[]' "$jq_program" 2>/dev/null)
+fi
+eval "$parsed"
 
 # --- Terminal width ---
 # CLAUDE_STATUSLINE_COLS fixes it (test-statusline.sh uses it). Otherwise the
@@ -100,6 +139,36 @@ if [[ "${CLAUDE_STATUSLINE_COLS:-}" =~ ^[0-9]+$ ]]; then
 else
   find_cols
 fi
+
+# --- Usage log: one rate-limit reading per account every 5 minutes ---
+# Written to <profile>/usage.db by usage/src/log.ts, which also refreshes the
+# dashboard (see usage/src/render.ts for where it is written). The throttle is
+# fork-free: a stamp file holding the last log time, read with the `read`
+# builtin, so the only cost on the hot path is a background bun once per 5 minutes.
+# Claude Code can cancel a status-line run mid-flight (busy sessions refresh
+# often), taking the background bun with it. So the stamp written here only
+# holds off a retry for a minute; log.ts moves it on 5 minutes once the row
+# is safely in the database.
+printf -v now_s '%(%s)T' -1
+if [ -n "$usage_log" ] && [ -n "$account_id" ] && [ -n "$account_dir" ] && [ -n "$five_pct_raw$week_pct_raw" ]; then
+  stamp="$account_dir/.usage-log-stamp"
+  last_s=0
+  [ -r "$stamp" ] && read -r last_s < "$stamp"
+  [[ "$last_s" =~ ^[0-9]+$ ]] || last_s=0
+  if (( now_s - last_s >= 300 )); then
+    printf '%s\n' "$((now_s - 240))" > "$stamp"
+    # Absolute path: the status line's PATH need not include ~/.bun/bin.
+    bun_bin="$HOME/.bun/bin/bun"
+    [ -x "$bun_bin" ] || bun_bin=bun
+    # Fully detached: Claude Code must not wait on it for the status line.
+    "$bun_bin" "${here:-.}/usage/src/log.ts" "$account_id" \
+      "$five_pct_raw" "$five_reset_raw" "$week_pct_raw" "$week_reset_raw" "$session_id" \
+      </dev/null >/dev/null 2>&1 &
+  fi
+fi
+
+# --- Account name colour: the config's [r, g, b], else a neutral grey ---
+account_color=$'\033'"[38;2;${account_rgb:-200;200;200}m"
 
 # --- Shorten verbose model display names ---
 model_display="${model_display/ (1M context)/ (1M)}"
@@ -228,6 +297,7 @@ SEP_LEN=3              # " │ " visible width
 prefix_visible_len() {
   local inc_rate=$1 inc_ab=$2 inc_par=$3 b_max=$4 d_max=$5
   local n=${#model_display}
+  [ -n "$account" ] && n=$((n + ${#account} + SEP_LEN))
   n=$((n + SEP_LEN))
   if [ "$inc_par" = 1 ] && [ -n "$dir_parent" ]; then
     n=$((n + ${#dir_parent} + 1))   # parent + "/"
@@ -284,7 +354,9 @@ done
 sep="${DIM}│${RESET}"
 
 gradient_text "$model_display" "${model_rgb[@]}"
-colored_prefix="${BOLD}${grad_text}${RESET}"
+colored_prefix=""
+[ -n "$account" ] && colored_prefix+="${BOLD}${account_color}${account}${RESET} ${sep} "
+colored_prefix+="${BOLD}${grad_text}${RESET}"
 colored_prefix+=" ${sep} "
 if [ "$inc_par" = 1 ] && [ -n "$dir_parent" ]; then
   colored_prefix+="${FG_DARK_ORANGE}${dir_parent}${RESET}${DIM}/${RESET}"
