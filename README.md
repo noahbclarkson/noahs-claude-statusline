@@ -11,13 +11,13 @@ Work │ Opus 4.7 ◕ │ Github/my-project │ feature-branch*↑2 │ 5h:42% 7
 - **Account** (optional) — which Claude Code profile the session runs under, in that profile's colour. Only with an [accounts config](#several-accounts).
 - **Model name** — a per-character gradient between two family-tinted colours (Opus magenta→violet, Sonnet cyan→indigo, Haiku lime→teal). The `(1M context)` suffix is dropped; the bar already shows how full the window is.
 - **Reasoning effort** — one symbol after the model: `○` low, `◔` medium, `◑` high, `◕` xhigh, `●` max. It follows `/effort` mid-session and is absent for models without an effort setting.
-- **Parent/current dir** — two-tone (parent in dark orange, current in bold yellow), from the working directory.
+- **Repository** — two-tone (dark orange, then bold yellow): the repository the session is working in, however deep it has `cd`'d. In a linked git worktree it reads `repo/worktree` (`my-repo/feature-x`), and the repo's name is kept even when the line is short of room; in a main checkout, `parent/repo`; outside git, the folder Claude Code was launched in.
 - **Git branch** — purple→blue gradient, with `*` for dirty, `↑N` ahead, `↓N` behind; the short SHA on a detached HEAD.
 - **Rate limits** — 5h and 7d windows when present, coloured on the same smooth green→red gradient as the bar.
 - **Prompt cache** — only when it matters: `cache 7m` (amber) once the one-hour cache has 10 minutes or less left, then `cold 640k` (blue): how many tokens the next turn will write back into the cache. Every request re-reads the conversation from the cache, and re-writing a lapsed one costs more than reading it, so a long session left idle is cheaper to `/compact` before you carry on. Not shown for the five-minute cache, which is cold after any pause.
 - **Context %** — number plus a sub-cell-precision progress bar that grows in eighths.
 
-When the terminal is too narrow, segments go in this order: rate limits, git ahead/behind, the parent dir, a first truncation of branch and dir, the cache warning, a second truncation, then the bar.
+When the terminal is too narrow, segments go in this order: rate limits, git ahead/behind, the parent folder (not a worktree's repo name), a first truncation of branch and dir, the cache warning, a second truncation, then the bar.
 
 ## Files
 

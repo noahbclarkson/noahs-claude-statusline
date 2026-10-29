@@ -106,7 +106,8 @@ jq_program='
   |
   @sh "model_id=\(.model.id // "")",
   @sh "model_display=\(.model.display_name // "Claude")",
-  @sh "project_dir=\(.workspace.current_dir // .cwd // .workspace.project_dir // "")",
+  @sh "work_dir=\(.workspace.current_dir // .cwd // "")",
+  @sh "launch_dir=\(.workspace.project_dir // "")",
   @sh "session_id=\(.session_id // "")",
   @sh "used_pct=\(.context_window.used_percentage // 0)",
   @sh "five_pct_raw=\(.rate_limits.five_hour.used_percentage // "")",
@@ -233,53 +234,75 @@ case "$model_id" in
   *)        model_rgb=(70 230 235  105 120 255) ;;
 esac
 
-# --- Project dir: parent/current ---
-# Claude Code sends Windows paths with backslashes ("C:\Users\me\proj"), which
-# basename and dirname split inconsistently. Normalising to forward slashes
-# first costs nothing on a POSIX path, where there are none to replace.
-if [ -n "$project_dir" ]; then
-  project_dir="${project_dir//\\//}"
-  dir_current=$(basename "$project_dir")
-  dir_parent=$(basename "$(dirname "$project_dir")")
-  dir_display="$dir_parent/$dir_current"
+# --- Folder: which repository (and worktree) the session is working in ---
+# Not the folder it has cd'd into ("apps/web" says nothing about which checkout
+# that is): walk up from the working directory to the folder holding .git,
+# fork-free. In a linked worktree, whose .git file points into the main repo's
+# .git/worktrees/, the segment reads repo/worktree ("my-repo/feature-x"); in a
+# main checkout, parent/repo. Outside git, the folder Claude Code was launched
+# in. Claude Code sends Windows paths with backslashes ("C:\Users\me\proj");
+# normalising to forward slashes costs nothing on a POSIX path.
+work_dir="${work_dir//\\//}";     work_dir="${work_dir%/}"
+launch_dir="${launch_dir//\\//}"; launch_dir="${launch_dir%/}"
+project_dir="${work_dir:-$launch_dir}"   # where the walk to .git starts
+repo_root=""
+check_dir="$project_dir"
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  [ -z "$check_dir" ] && break
+  [ "$check_dir" = "/" ] && break
+  if [ -e "$check_dir/.git" ]; then
+    repo_root="$check_dir"
+    break
+  fi
+  parent="${check_dir%/*}"
+  [ "$parent" = "$check_dir" ] && break
+  check_dir="$parent"
+done
+
+dir_parent=""
+dir_current=""
+dir_parent_kept=""   # set for a worktree: its repo's name is never dropped for room
+if [ -n "$repo_root" ]; then
+  dir_current="${repo_root##*/}"
+  gitdir_line=""
+  [ -f "$repo_root/.git" ] && read -r gitdir_line < "$repo_root/.git"
+  gitdir_line="${gitdir_line//\\//}"
+  if [[ "$gitdir_line" == "gitdir: "*"/.git/worktrees/"* ]]; then
+    main_repo="${gitdir_line#gitdir: }"
+    main_repo="${main_repo%%/.git/worktrees/*}"
+    dir_parent="${main_repo##*/}"
+    dir_parent_kept=1
+  else
+    parent="${repo_root%/*}"
+    dir_parent="${parent##*/}"
+  fi
 else
-  dir_display="unknown"
+  folder="${launch_dir:-$work_dir}"
+  if [ -n "$folder" ]; then
+    dir_current="${folder##*/}"
+    parent="${folder%/*}"
+    [ "$parent" != "$folder" ] && dir_parent="${parent##*/}"
+  fi
 fi
 
 # --- Git branch + dirty indicator + ahead/behind ---
-# Fast-path: walk up the tree (fork-free) looking for .git before spawning git.
 branch=""
 git_suffix=""
-in_git_repo=""
-if [ -n "$project_dir" ]; then
-  check_dir="$project_dir"
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    [ -z "$check_dir" ] && break
-    [ "$check_dir" = "/" ] && break
-    if [ -e "$check_dir/.git" ]; then
-      in_git_repo=1
-      break
-    fi
-    parent="${check_dir%/*}"
-    [ "$parent" = "$check_dir" ] && break
-    check_dir="$parent"
-  done
-fi
 git_dirty=""
 git_ab=""
 git_ab_cells=0   # visible-cell count of git_ab (arrows are 1 cell but 3 bytes in UTF-8)
-if [ -n "$in_git_repo" ] && command -v git >/dev/null 2>&1; then
-  branch=$(git -C "$project_dir" --no-optional-locks branch --show-current 2>/dev/null)
+if [ -n "$repo_root" ] && command -v git >/dev/null 2>&1; then
+  branch=$(git -C "$repo_root" --no-optional-locks branch --show-current 2>/dev/null)
   # Detached HEAD (bisect, a checked-out tag, a rebase in flight) has no branch
   # name; the short SHA keeps the segment useful instead of blanking it.
   if [ -z "$branch" ]; then
-    branch=$(git -C "$project_dir" --no-optional-locks rev-parse --short HEAD 2>/dev/null)
+    branch=$(git -C "$repo_root" --no-optional-locks rev-parse --short HEAD 2>/dev/null)
   fi
   if [ -n "$branch" ]; then
-    if [ -n "$(git -C "$project_dir" --no-optional-locks status --porcelain 2>/dev/null)" ]; then
+    if [ -n "$(git -C "$repo_root" --no-optional-locks status --porcelain 2>/dev/null)" ]; then
       git_dirty="*"
     fi
-    ab=$(git -C "$project_dir" --no-optional-locks rev-list --left-right --count "@{upstream}...HEAD" 2>/dev/null)
+    ab=$(git -C "$repo_root" --no-optional-locks rev-list --left-right --count "@{upstream}...HEAD" 2>/dev/null)
     if [ -n "$ab" ]; then
       behind=$(echo "$ab" | awk '{print $1}')
       ahead=$(echo "$ab"  | awk '{print $2}')
@@ -332,7 +355,7 @@ fi
 # Degradation order (least essential dropped first):
 #   1. rate-limits segment
 #   2. git ahead/behind suffix (keep dirty *)
-#   3. parent directory
+#   3. parent directory (not a worktree's repo name)
 #   4. truncate branch to 14, then current dir to 18
 #   5. the prompt-cache warning
 #   6. truncate branch to 8, then current dir to 10
@@ -393,7 +416,7 @@ while :; do
     inc_rate=0
   elif [ "$inc_ab" = 1 ] && [ -n "$git_ab" ]; then
     inc_ab=0
-  elif [ "$inc_par" = 1 ] && [ -n "$dir_parent" ]; then
+  elif [ "$inc_par" = 1 ] && [ -n "$dir_parent" ] && [ -z "$dir_parent_kept" ]; then
     inc_par=0
   elif [ "$b_max" -gt 14 ] && [ -n "$branch" ] && [ "${#branch}" -gt 14 ]; then
     b_max=14

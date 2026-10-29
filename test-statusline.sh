@@ -64,6 +64,11 @@ heading "Fractional percentages"
 render "used_percentage=47.4" "$(payload claude-opus-4-5 'Claude Opus 4.7' 47.4 42 18)"
 render "used_percentage=47.6" "$(payload claude-opus-4-5 'Claude Opus 4.7' 47.6 42 18)"
 
+heading "Folder — the repository, not the subfolder the session is in"
+render "repo top" "$(payload claude-opus-4-5 'Claude Opus 4.7' 47 42 18)"
+render "cd usage/src" "$(payload claude-opus-4-5 'Claude Opus 4.7' 47 42 18 | sed 's#^{#{ "cwd": "'"$SCRIPT_DIR"'/usage/src",#')"
+render "outside git (launch dir)" "$(payload claude-opus-4-5 'Claude Opus 4.7' 47 42 18 | sed 's#"project_dir": "[^"]*"#"project_dir": "/tmp/some-project"#')"
+
 heading "Reasoning effort — one symbol after the model"
 for level in low medium high xhigh max; do
   render "effort=$level" "$(payload claude-opus-4-5 'Claude Opus 4.7' 47 42 18 | sed 's/^{/{ "effort": { "level": "'"$level"'" },/')"
