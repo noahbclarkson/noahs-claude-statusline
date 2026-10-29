@@ -1,0 +1,10 @@
+{
+  "accounts": [
+    { "id": "personal", "label": "Personal", "configDir": "~/.claude", "color": [110, 220, 130] },
+    { "id": "work", "label": "Work", "configDir": "~/.claude-work", "color": [255, 165, 60] }
+  ],
+  "usage": {
+    "log": true,
+    "dashboard": "~/claude-usage/usage-dashboard.html"
+  }
+}

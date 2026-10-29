@@ -1,0 +1,16 @@
+{
+  "name": "claude-usage",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun src/build.ts",
+    "open": "bun src/build.ts --open",
+    "import-windows": "bun src/import-windows.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.3",
+    "typescript": "^7.0.2"
+  }
+}

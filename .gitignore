@@ -3,3 +3,10 @@
 .statusline-cols*
 .statusline-width-debug.log
 *.log
+# Usage dashboard build output (it inlines every reading) and dependencies
+usage/node_modules/
+usage/dist/
+# Usage readings live in each Claude Code profile folder, never here
+*.db
+*.db-shm
+*.db-wal
