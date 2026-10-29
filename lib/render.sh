@@ -7,7 +7,7 @@
 # find the terminal's width, and $here, its own folder, then sources this
 # file. Sourcing costs no fork.
 #
-# Layout: [account |] model | parent/dir | branch[*↑↓] | rate-limits | context% [bar]
+# Layout: [account |] model [effort] | parent/dir | branch[*↑↓] | rate-limits | [cache |] context% [bar]
 STATUSLINE_COLS=120
 
 input=$(cat)
@@ -117,7 +117,13 @@ jq_program='
   @sh "account_id=\($acct.id // "")",
   @sh "account_dir=\($acct.dir // "")",
   @sh "account_rgb=\(($acct.color // []) | map(tostring) | join(";"))",
-  @sh "usage_log=\(if ($cfg[0].usage.log? // false) == true then "1" else "" end)"
+  @sh "usage_log=\(if ($cfg[0].usage.log? // false) == true then "1" else "" end)",
+  @sh "effort=\(.effort.level // "")",
+  @sh "cache_seen=\(if .prompt_cache.caching_observed == true then "1" else "" end)",
+  @sh "cache_ttl=\(.prompt_cache.ttl // "")",
+  @sh "cache_warm=\(.prompt_cache.warm | if . == null then "" else tostring end)",
+  @sh "cache_expires=\(.prompt_cache.expires_at | if type == "number" then floor else "" end)",
+  @sh "cache_recache=\(.prompt_cache.recache_tokens_if_cold | if type == "number" then floor else "" end)"
 '
 parsed=""
 if [ -r "$statusline_config" ]; then
@@ -171,7 +177,53 @@ fi
 account_color=$'\033'"[38;2;${account_rgb:-200;200;200}m"
 
 # --- Shorten verbose model display names ---
-model_display="${model_display/ (1M context)/ (1M)}"
+# The window's size isn't worth the room: the bar already says how full it is.
+model_display="${model_display/ (1M context)/}"
+
+# --- Reasoning effort: one symbol after the model, filling as effort rises ---
+# Absent when the model takes no effort setting. Follows /effort mid-session.
+case "$effort" in
+  low)    effort_glyph="○" ;;
+  medium) effort_glyph="◔" ;;
+  high)   effort_glyph="◑" ;;
+  xhigh)  effort_glyph="◕" ;;
+  max)    effort_glyph="●" ;;
+  *)      effort_glyph="" ;;
+esac
+
+# --- Prompt cache: only when it has gone cold, or will within 10 minutes ---
+# Each request re-reads the whole conversation from the prompt cache; once its
+# one-hour lifetime runs out, the next turn writes all of it back, which costs
+# more than reading it. "cache 7m" is the warning; "cold 640k" is how much the
+# next turn will write. Only for the one-hour cache: the five-minute one is
+# cold after any pause, so the segment would never go away. Needs Claude
+# Code's statusLine.refreshInterval to count down while a session is idle.
+fmt_tokens() {  # sets tok_str: 640123 -> 640k, 1234567 -> 1.2M
+  local n=$1 t
+  if (( n >= 999500 )); then
+    t=$(( (n + 50000) / 100000 ))
+    tok_str="$((t / 10)).$((t % 10))M"
+  elif (( n >= 1000 )); then
+    tok_str="$(( (n + 500) / 1000 ))k"
+  else
+    tok_str="$n"
+  fi
+}
+cache_plain=""
+cache_color=""
+if [ -n "$cache_seen" ] && [ "$cache_ttl" = "1h" ]; then
+  if [ "$cache_warm" = "false" ] || { [[ "$cache_expires" =~ ^[0-9]+$ ]] && (( now_s >= cache_expires )); }; then
+    cache_plain="cold"
+    if [[ "$cache_recache" =~ ^[0-9]+$ ]] && (( cache_recache > 0 )); then
+      fmt_tokens "$cache_recache"
+      cache_plain+=" $tok_str"
+    fi
+    cache_color=$'\033[38;2;110;170;255m'   # cold blue
+  elif [[ "$cache_expires" =~ ^[0-9]+$ ]] && (( cache_expires - now_s <= 600 )); then
+    cache_plain="cache $(( (cache_expires - now_s + 59) / 60 ))m"
+    cache_color=$'\033[38;2;255;175;60m'    # amber
+  fi
+fi
 
 # --- Model name: per-family endpoints for a left-to-right gradient ---
 case "$model_id" in
@@ -281,9 +333,10 @@ fi
 #   1. rate-limits segment
 #   2. git ahead/behind suffix (keep dirty *)
 #   3. parent directory
-#   4. truncate branch to 14, then 8
-#   5. truncate current dir to 18, then 10
-#   6. drop the bar entirely
+#   4. truncate branch to 14, then current dir to 18
+#   5. the prompt-cache warning
+#   6. truncate branch to 8, then current dir to 10
+#   7. drop the bar entirely
 cols=$STATUSLINE_COLS
 TARGET_BAR=8           # min bar interior cells we want
 SEP_LEN=3              # " │ " visible width
@@ -292,11 +345,14 @@ SEP_LEN=3              # " │ " visible width
 # All non-separator strings are assumed ASCII; truncation clamps to b_max/d_max
 # cells (truncate_str produces exactly that many visible cells via …). The
 # only multi-byte fields handled specially are the SEP_LEN constant and
-# git_ab_cells, both pre-computed in cells rather than bytes.
-# args: include_rate include_ab include_parent branch_max dir_max
+# git_ab_cells, both pre-computed in cells rather than bytes; the effort symbol
+# is one cell. Sets $prefix_len rather than printing it, so the loop below
+# runs without a subshell per step (a fork each, slow on Windows).
+# args: include_rate include_ab include_parent branch_max dir_max include_cache
 prefix_visible_len() {
-  local inc_rate=$1 inc_ab=$2 inc_par=$3 b_max=$4 d_max=$5
+  local inc_rate=$1 inc_ab=$2 inc_par=$3 b_max=$4 d_max=$5 inc_cache=$6
   local n=${#model_display}
+  [ -n "$effort_glyph" ] && n=$((n + 2))   # " ◕"
   [ -n "$account" ] && n=$((n + ${#account} + SEP_LEN))
   n=$((n + SEP_LEN))
   if [ "$inc_par" = 1 ] && [ -n "$dir_parent" ]; then
@@ -317,18 +373,21 @@ prefix_visible_len() {
   if [ "$inc_rate" = 1 ] && [ -n "$plain_rate" ]; then
     n=$((n + SEP_LEN + ${#plain_rate}))
   fi
+  if [ "$inc_cache" = 1 ] && [ -n "$cache_plain" ]; then
+    n=$((n + SEP_LEN + ${#cache_plain}))
+  fi
   n=$((n + SEP_LEN + ${#used_int} + 2))   # " │ N% "
-  echo "$n"
+  prefix_len=$n
 }
 
-inc_rate=1; inc_ab=1; inc_par=1
+inc_rate=1; inc_ab=1; inc_par=1; inc_cache=1
 b_max=999; d_max=999
 drop_bar=0
 budget=$((cols - 2 - TARGET_BAR))   # 2 for brackets
 
 while :; do
-  len=$(prefix_visible_len "$inc_rate" "$inc_ab" "$inc_par" "$b_max" "$d_max")
-  [ "$len" -le "$budget" ] && break
+  prefix_visible_len "$inc_rate" "$inc_ab" "$inc_par" "$b_max" "$d_max" "$inc_cache"
+  [ "$prefix_len" -le "$budget" ] && break
 
   if [ "$inc_rate" = 1 ] && [ -n "$plain_rate" ]; then
     inc_rate=0
@@ -340,6 +399,8 @@ while :; do
     b_max=14
   elif [ "$d_max" -gt 18 ] && [ "${#dir_current}" -gt 18 ]; then
     d_max=18
+  elif [ "$inc_cache" = 1 ] && [ -n "$cache_plain" ]; then
+    inc_cache=0
   elif [ "$b_max" -gt 8 ] && [ -n "$branch" ] && [ "${#branch}" -gt 8 ]; then
     b_max=8
   elif [ "$d_max" -gt 10 ] && [ "${#dir_current}" -gt 10 ]; then
@@ -357,6 +418,8 @@ gradient_text "$model_display" "${model_rgb[@]}"
 colored_prefix=""
 [ -n "$account" ] && colored_prefix+="${BOLD}${account_color}${account}${RESET} ${sep} "
 colored_prefix+="${BOLD}${grad_text}${RESET}"
+# The symbol takes the model gradient's end colour, so it reads as part of the name.
+[ -n "$effort_glyph" ] && colored_prefix+=" "$'\033'"[38;2;${model_rgb[3]};${model_rgb[4]};${model_rgb[5]}m${effort_glyph}${RESET}"
 colored_prefix+=" ${sep} "
 if [ "$inc_par" = 1 ] && [ -n "$dir_parent" ]; then
   colored_prefix+="${FG_DARK_ORANGE}${dir_parent}${RESET}${DIM}/${RESET}"
@@ -380,6 +443,10 @@ if [ "$inc_rate" = 1 ] && [ -n "$rate_str" ]; then
   colored_prefix+="${rate_str}"
 fi
 
+if [ "$inc_cache" = 1 ] && [ -n "$cache_plain" ]; then
+  colored_prefix+=" ${sep} ${cache_color}${cache_plain}${RESET}"
+fi
+
 colored_prefix+=" ${sep} "
 colored_prefix+="${FG_WHITE}${used_int}%${RESET}"
 colored_prefix+=" "
@@ -387,7 +454,8 @@ colored_prefix+=" "
 # Visible length in cells — matches what we used during the budget loop, so
 # bar sizing stays consistent (avoids the byte-vs-cell discrepancy that
 # stripping ANSI + ${#stripped} would introduce for │ separators and arrows).
-visible_len=$(prefix_visible_len "$inc_rate" "$inc_ab" "$inc_par" "$b_max" "$d_max")
+prefix_visible_len "$inc_rate" "$inc_ab" "$inc_par" "$b_max" "$d_max" "$inc_cache"
+visible_len=$prefix_len
 
 # --- Calculate bar width ---
 # Take 95% of the free space and trim 2 more cells, keeping a clear right-edge

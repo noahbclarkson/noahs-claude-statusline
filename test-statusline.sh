@@ -64,9 +64,26 @@ heading "Fractional percentages"
 render "used_percentage=47.4" "$(payload claude-opus-4-5 'Claude Opus 4.7' 47.4 42 18)"
 render "used_percentage=47.6" "$(payload claude-opus-4-5 'Claude Opus 4.7' 47.6 42 18)"
 
+heading "Reasoning effort — one symbol after the model"
+for level in low medium high xhigh max; do
+  render "effort=$level" "$(payload claude-opus-4-5 'Claude Opus 4.7' 47 42 18 | sed 's/^{/{ "effort": { "level": "'"$level"'" },/')"
+done
+
+heading "Prompt cache — shown only when cold or within 10 minutes of it"
+now=$(date +%s)
+cache() { # $1 label, $2 prompt_cache object
+  render "$1" "$(payload claude-opus-4-5 'Claude Opus 4.7' 47 42 18 | sed 's/^{/{ "prompt_cache": '"$2"',/')"
+}
+cache "1h, 25 minutes left"   '{ "caching_observed": true, "warm": true, "ttl": "1h", "expires_at": '"$((now + 1500))"', "recache_tokens_if_cold": 640123 }'
+cache "1h, 7 minutes left"    '{ "caching_observed": true, "warm": true, "ttl": "1h", "expires_at": '"$((now + 420))"', "recache_tokens_if_cold": 640123 }'
+cache "1h, expired"           '{ "caching_observed": true, "warm": true, "ttl": "1h", "expires_at": '"$((now - 5))"', "recache_tokens_if_cold": 640123 }'
+cache "warm=false, 1.2M"      '{ "caching_observed": true, "warm": false, "ttl": "1h", "expires_at": null, "recache_tokens_if_cold": 1234567 }'
+cache "5m cache, expired"     '{ "caching_observed": true, "warm": true, "ttl": "5m", "expires_at": '"$((now - 5))"', "recache_tokens_if_cold": 640123 }'
+
 heading "Narrow terminals — degradation ladder"
 echo "Rate limits go first, then git ahead/behind, then the parent dir, then"
-echo "the branch and dir are truncated, then the bar is dropped. Each line is"
+echo "the branch and dir are truncated (the cache warning goes between the two"
+echo "rounds of truncation), then the bar is dropped. Each line is"
 echo "printed under a ruler of the width it was rendered for, so anything that"
 echo "overruns the ruler would have wrapped in a real terminal."
 # Ruler marking every 10th cell, so an overrun is visible at a glance.
