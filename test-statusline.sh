@@ -1,22 +1,20 @@
 #!/usr/bin/env bash
-# Visual test harness for statusline.sh.
+# Visual test harness for the status line.
 #
 # Renders the statusline against fixed payloads so the color ramps, the
 # sub-cell bar boundary and the narrow-terminal degradation can be eyeballed
 # without waiting for real sessions to drift into those states. Nothing here
 # asserts — read the output.
 #
-# The width section drives STATUSLINE_COLS the same way the real Stop hook
-# does, by writing the per-session cache file, and removes what it wrote.
+# It runs this platform's entry script (statusline-linux.sh where /proc
+# exists, statusline.sh otherwise; STATUSLINE=path picks another) and fixes the
+# width with CLAUDE_STATUSLINE_COLS, so nothing is written anywhere.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-STATUSLINE="$SCRIPT_DIR/statusline.sh"
-CACHE_DIR="$HOME/.claude"
+if [ -z "${STATUSLINE:-}" ]; then
+  if [ -d /proc/self ]; then STATUSLINE="$SCRIPT_DIR/statusline-linux.sh"; else STATUSLINE="$SCRIPT_DIR/statusline.sh"; fi
+fi
 SESSION="statusline-harness"
-CACHE_FILE="$CACHE_DIR/.statusline-cols-$SESSION"
-
-cleanup() { rm -f "$CACHE_FILE"; }
-trap cleanup EXIT
 
 heading() { printf '\n\033[1;36m%s\033[0m\n' "$1"; }
 label()   { printf '\033[2m%-34s\033[0m' "$1"; }
@@ -44,7 +42,7 @@ JSON
 
 # A wide terminal for everything except the degradation section, so the bar
 # has room and the only variable is the payload.
-printf '120\n' > "$CACHE_FILE"
+export CLAUDE_STATUSLINE_COLS=120
 
 heading "Model gradients"
 render "Opus"    "$(payload claude-opus-4-5   'Claude Opus 4.7 (1M context)' 47 42 18)"
@@ -80,8 +78,7 @@ ruler() {
   printf '%s' "$out"
 }
 for cols in 120 100 84 72 60 48 36 24; do
-  printf '%s
-' "$cols" > "$CACHE_FILE"
+  CLAUDE_STATUSLINE_COLS=$cols
   printf '
 [2m%s  (cols=%s)[0m
 ' "$(ruler "$cols")" "$cols"
@@ -90,7 +87,7 @@ done
 echo
 
 heading "Missing fields"
-printf '120\n' > "$CACHE_FILE"
+CLAUDE_STATUSLINE_COLS=120
 render "no rate limits" '{
   "model": { "id": "claude-opus-4-5", "display_name": "Claude Opus 4.7" },
   "workspace": { "project_dir": "'"$SCRIPT_DIR"'" },
