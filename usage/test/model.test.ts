@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { backtest } from "../src/model/backtest";
 import { DEFAULT_MODEL_CONFIG, type ModelConfig, demand, forecastAll, makeCtx, project } from "../src/model/forecast";
-import { type RawSample, buildSeries, completeDays, currentFive, currentWindow, pctAt } from "../src/model/series";
+import { type RawSample, buildSeries, completeDays, currentFive, currentWindow, noFiveLimit, pctAt } from "../src/model/series";
 import { maxMultiplier, simulate } from "../src/model/simulate";
 import { HOUR, WEEK, addDays, dayOfWeek, isWeekendDow } from "../src/model/time";
 import { weekendStats } from "../src/model/weekend";
@@ -83,6 +83,32 @@ describe("series cleaning", () => {
     const finals = s.windows.slice(1).reduce((a, w) => a + w.points[w.points.length - 1].pct, 0);
     const firstGain = s.windows[0].points.at(-1)!.pct - s.windows[0].points[0].pct;
     expect(total).toBeCloseTo(finals + firstGain, 0);
+  });
+});
+
+describe("5-hour limit", () => {
+  const r = local(2026, 6, 9, 6);
+  const t0 = r - 3 * 86400;
+  /** A day of readings every 5 minutes, weekly usage rising by `rise` per reading. */
+  const day = (five: boolean, rise: number): RawSample[] =>
+    Array.from({ length: 288 }, (_, i) => [t0 + i * 300, five ? 20 : null, five ? t0 + i * 300 + HOUR : null, 10 + i * rise, r]);
+
+  test("in use for a day with no 5-hour readings: no 5-hour limit", () => {
+    const s = buildSeries("a", "A", day(false, 0.05), t0 + 86400);
+    expect(noFiveLimit(s, t0 + 86400)).toBe(true);
+  });
+
+  test("an account that reported a 5-hour window in the last day has the limit", () => {
+    const raw = day(false, 0.05);
+    raw[200] = [raw[200][0], 15, raw[200][0] + HOUR, raw[200][3], r];
+    const s = buildSeries("a", "A", raw, t0 + 86400);
+    expect(noFiveLimit(s, t0 + 86400)).toBe(false);
+    expect(noFiveLimit(buildSeries("a", "A", day(true, 0.05), t0 + 86400), t0 + 86400)).toBe(false);
+  });
+
+  test("an idle account, with sessions open but no usage, is not mistaken for one", () => {
+    const s = buildSeries("a", "A", day(false, 0), t0 + 86400);
+    expect(noFiveLimit(s, t0 + 86400)).toBe(false);
   });
 });
 

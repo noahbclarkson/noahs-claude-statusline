@@ -9,7 +9,7 @@
 // Usage inside one window can only grow, so a running max per window removes
 // the stale readings without discarding anything real.
 
-import { HOUR, WEEK, addDays, dayOfWeek, dayStart, hourIndex, hourOfDay, isWeekendDow } from "./time";
+import { DAY, HOUR, WEEK, addDays, dayOfWeek, dayStart, hourIndex, hourOfDay, isWeekendDow } from "./time";
 
 /** [ts, five_pct, five_resets_at, week_pct, week_resets_at] as stored in usage.db. */
 export type RawSample = [number, number | null, number | null, number | null, number | null];
@@ -51,6 +51,8 @@ export interface AccountSeries {
   five: FivePoint[];
   firstObs: number | null;
   lastObs: number | null;
+  /** Time of the last reading that reported a 5-hour window, or null if none ever did. */
+  lastFiveObs: number | null;
   /** Epoch-hour index of hourly[0]. */
   hour0: number;
   /** Percentage points of the weekly limit used in each hour, hour0 … hour of now. */
@@ -72,6 +74,8 @@ export function buildSeries(id: string, label: string, raw: RawSample[], now: nu
 
   const firstObs = windows.length ? windows[0].points[0].t : null;
   const lastObs = samples.length ? samples[samples.length - 1][0] : null;
+  let lastFiveObs: number | null = null;
+  for (const [t, f] of samples) if (f != null) lastFiveObs = t;
 
   const hour0 = hourIndex(firstObs ?? now);
   const len = Math.max(0, hourIndex(now) - hour0 + 1);
@@ -128,7 +132,7 @@ export function buildSeries(id: string, label: string, raw: RawSample[], now: nu
     }
   }
 
-  return { id, label, now, windows, five, firstObs, lastObs, hour0, hourly, hod, dow, days };
+  return { id, label, now, windows, five, firstObs, lastObs, lastFiveObs, hour0, hourly, hod, dow, days };
 }
 
 function buildWindows(samples: RawSample[]): WeekWindow[] {
@@ -204,6 +208,26 @@ export function currentWindow(s: AccountSeries, t: number): CurrentWindow | null
   let end = last.end;
   while (end <= t) end += WEEK;
   return { start: end - WEEK, end, pct: 0 };
+}
+
+/**
+ * Whether the account has no 5-hour limit at t. A plan without one (20x accounts moving to the
+ * "Ultra" tier from late October 2026) reports no five_hour window at all, while an account with
+ * the limit reports one whenever it is in use. So: weekly usage rose between two readings in the
+ * last day, and none of that day's readings had a 5-hour window.
+ */
+export function noFiveLimit(s: AccountSeries, t: number): boolean {
+  const since = t - DAY;
+  if (s.lastFiveObs != null && s.lastFiveObs >= since) return false;
+  for (const w of s.windows) {
+    let prev: Point | null = null;
+    for (const p of w.points) {
+      if (p.t > t) break;
+      if (prev && prev.t >= since && p.pct > prev.pct) return true;
+      prev = p;
+    }
+  }
+  return false;
 }
 
 /** Current 5-hour window at t. */

@@ -380,7 +380,7 @@ function combinedView(A: Analysis): HTMLElement {
         meter(a.cw.pct, st.target, a.color),
         `Resets ${inTime(a.cw.end)}`,
         a.proj ? `Forecast at reset: ${fmt.pct(a.proj.atReset)} on its own${shared != null ? `, ${fmt.pct(shared)} with sharing` : ""}` : null,
-        `5-hour window: ${fmt.pct(a.five.pct)}${a.five.reset ? `, resets ${fmt.time(a.five.reset)}` : ""}`,
+        a.five.limited ? `5-hour window: ${fmt.pct(a.five.pct)}${a.five.reset ? `, resets ${fmt.time(a.five.reset)}` : ""}` : "No 5-hour limit",
       ),
     );
   }
@@ -511,11 +511,13 @@ function accountView(a: AccountView): HTMLElement {
         : tile("Forecast at reset", "–", a.chosen.note ?? "Not enough history yet."),
       p ? tile(`Reaches ${ceiling}`, p.hitTarget ? fmt.weekdayTime(p.hitTarget) : "Not before reset", p.hit100 ? `Hits 100% ${fmt.dateTime(p.hit100)}` : `Stays under 100% until ${fmt.weekdayTime(cw.end)}`) : tile(`Reaches ${ceiling}`, "–"),
       paceTile,
-      tile(
-        "5-hour window",
-        fmt.pct(a.five.pct),
-        a.five.reset ? `Resets ${fmt.time(a.five.reset)} (in ${fmt.duration(a.five.reset - NOW)}); on pace for ${fmt.pct(fivePace(a))}` : "No active 5-hour window",
-      ),
+      a.five.limited
+        ? tile(
+            "5-hour window",
+            fmt.pct(a.five.pct),
+            a.five.reset ? `Resets ${fmt.time(a.five.reset)} (in ${fmt.duration(a.five.reset - NOW)}); on pace for ${fmt.pct(fivePace(a))}` : "No active 5-hour window",
+          )
+        : tile("5-hour window", "None", "This plan has no 5-hour limit, only the weekly one"),
     ),
   );
 
@@ -551,10 +553,16 @@ function accountView(a: AccountView): HTMLElement {
 
   root.append(modelsCard(a));
 
-  const two2 = h("div", { class: "grid two" });
-  two2.append(card("5-hour window", "The rolling 5-hour limit, as reported to the status line.", fiveChart(a, from)));
-  two2.append(card("Daily usage", "Percentage points of the weekly limit used per day. Lighter: forecast.", accountDaily(a, from)));
-  root.append(two2);
+  const daily = card("Daily usage", "Percentage points of the weekly limit used per day. Lighter: forecast.", accountDaily(a, from));
+  // A plan with no 5-hour limit has no 5-hour chart; daily usage takes the full width.
+  if (a.five.limited) {
+    const two2 = h("div", { class: "grid two" });
+    two2.append(card("5-hour window", "The rolling 5-hour limit, as reported to the status line.", fiveChart(a, from)));
+    two2.append(daily);
+    root.append(two2);
+  } else {
+    root.append(daily);
+  }
   return root;
 }
 

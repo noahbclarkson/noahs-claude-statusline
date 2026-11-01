@@ -16,7 +16,7 @@ import {
   rateAt,
   weightedDays,
 } from "../model/forecast";
-import { type AccountSeries, type CurrentWindow, type DayUsage, completeDays, currentFive, currentWindow } from "../model/series";
+import { type AccountSeries, type CurrentWindow, type DayUsage, completeDays, currentFive, currentWindow, noFiveLimit } from "../model/series";
 import { type SimAccount, type SimResult, maxMultiplier, simulate } from "../model/simulate";
 import { DAY, dayStart } from "../model/time";
 import { type WeekendStats, sumDays, weekendStats } from "../model/weekend";
@@ -34,7 +34,8 @@ export interface AccountView {
   set: ForecastSet;
   chosen: Forecast;
   cw: CurrentWindow | null;
-  five: { pct: number; reset: number | null };
+  /** limited: false for a plan with no 5-hour limit (see noFiveLimit). */
+  five: { pct: number; reset: number | null; limited: boolean };
   until: number;
   proj: Projection | null;
   projBy: Partial<Record<ModelId, Projection>>;
@@ -116,7 +117,7 @@ function view(s: AccountSeries, index: number, st: Settings, now: number): Accou
     set,
     chosen,
     cw,
-    five: currentFive(s, now),
+    five: { ...currentFive(s, now), limited: !noFiveLimit(s, now) },
     until,
     proj,
     projBy,
