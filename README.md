@@ -15,7 +15,7 @@ Work │ Opus 4.7 ◕ │ Github/my-project │ feature-branch*↑2 │ 5h:42% 7
 - **Git branch** — purple→blue gradient, with `*` for dirty, `↑N` ahead, `↓N` behind; the short SHA on a detached HEAD.
 - **Rate limits** — 5h and 7d windows when present, coloured on the same smooth green→red gradient as the bar.
 - **Prompt cache** — only when it matters: `cache 7m` (amber) once the one-hour cache has 10 minutes or less left, then `cold 640k` (blue): how many tokens the next turn will write back into the cache. Every request re-reads the conversation from the cache, and re-writing a lapsed one costs more than reading it, so a long session left idle is cheaper to `/compact` before you carry on. Not shown for the five-minute cache, which is cold after any pause.
-- **Context %** — number plus a sub-cell-precision progress bar that grows in eighths.
+- **Context %** — number plus a sub-cell-precision progress bar that grows in eighths. The fill uncovers a fixed green→red gradient laid along the whole bar, so it starts green and only reaches red near the end; the colour at its tip says how full the context is.
 
 When the terminal is too narrow, segments go in this order: rate limits, git ahead/behind, the parent folder (not a worktree's repo name), a first truncation of branch and dir, the cache warning, a second truncation, then the bar.
 

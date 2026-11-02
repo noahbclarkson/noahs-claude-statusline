@@ -326,8 +326,6 @@ used_int=$(printf '%.0f' "$used_pct" 2>/dev/null || echo 0)
 [ "$used_int" -lt 0 ] 2>/dev/null && used_int=0
 [ "$used_int" -gt 100 ] 2>/dev/null && used_int=100
 
-grad_color "$used_int"
-bar_fill_color="$grad_result"
 bar_empty_color=$'[90m'
 bar_empty_bg=$'[48;5;236m'  # dark gray BG used behind the partial-block boundary cell
 
@@ -518,9 +516,19 @@ case "$remainder" in
   7) partial_char="▉" ;;
 esac
 
+# The fill uncovers a fixed gradient: each cell takes grad_color's colour for its place along the
+# bar (its centre, as a percentage of the width), so the bar is green near the start and only
+# reaches red at the far end, and the colour at the tip says how full the context is. A colour
+# code is written only where it changes from the previous cell.
 bar_filled=""
 bar_empty_str=""
+last_sgr=""
 for ((i=0; i<full_cells; i++)); do
+  grad_color $(( (i * 8 + 4) * 100 / total_eighths ))
+  if [ "$grad_result" != "$last_sgr" ]; then
+    bar_filled+="$grad_result"
+    last_sgr=$grad_result
+  fi
   bar_filled+="█"
 done
 for ((i=0; i<empty; i++)); do
@@ -532,13 +540,14 @@ done
 # terminal default and reads as a gap before the empty fill begins.
 partial_segment=""
 if [ -n "$partial_char" ]; then
-  partial_segment="${bar_fill_color}${bar_empty_bg}${partial_char}${RESET}"
+  grad_color $(( (full_cells * 8 + 4) * 100 / total_eighths ))
+  partial_segment="${grad_result}${bar_empty_bg}${partial_char}${RESET}"
 fi
 
 if [ "$drop_bar" = 1 ]; then
   bar=""
 else
-  bar="${DIM}[${RESET}${bar_fill_color}${bar_filled}${RESET}${partial_segment}${bar_empty_color}${bar_empty_str}${RESET}${DIM}]${RESET}"
+  bar="${DIM}[${RESET}${bar_filled}${RESET}${partial_segment}${bar_empty_color}${bar_empty_str}${RESET}${DIM}]${RESET}"
 fi
 
 printf '%s%s\n' "$colored_prefix" "$bar"
