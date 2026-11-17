@@ -47,6 +47,34 @@ describe("series cleaning", () => {
     expect(pctAt(s, r - 3 * 86400 + 650)).toBe(20);
   });
 
+  test("a manual reset (resets_at unchanged) starts a new window; stale sessions on either side are ignored", () => {
+    const r = local(2026, 6, 9, 6);
+    const t0 = r - 4 * 86400;
+    const raw: RawSample[] = [
+      [t0, null, null, 50, r, 0],
+      [t0 + 300, null, null, 35, r, 1], // idle session: a lower figure, not a reset
+      [t0 + 450, null, null, 80, r, 2],
+      [t0 + 600, null, null, 90, r, 0],
+      [t0 + 900, null, null, 2, r, 0], // the same session falls: reset
+      [t0 + 1200, null, null, 80, r, 2], // last heard before the reset, still showing 80
+      [t0 + 1350, null, null, 85, r, 4], // first heard now, but showing a figure from before the reset
+      [t0 + 1500, null, null, 5, r, 0],
+      [t0 + 1800, null, null, 35, r, 1], // idle since before the reset
+      [t0 + 2100, null, null, 7, r, 2], // has heard from the API since
+      [t0 + 2400, null, null, 9, r, 3], // a new session
+      [t0 + 2700, null, null, 10, r, 4], // caught up
+    ];
+    const s = buildSeries("a", "A", raw, t0 + 3000);
+    expect(s.windows).toHaveLength(2);
+    expect(s.windows[0].points.map((p) => p.pct)).toEqual([50, 50, 80, 90]);
+    expect(s.windows[0].end).toBe(t0 + 900);
+    expect(s.windows[1].start).toBe(t0 + 900);
+    expect(s.windows[1].points.map((p) => p.pct)).toEqual([2, 5, 7, 9, 10]);
+    expect(currentWindow(s, t0 + 3000)).toEqual({ start: t0 + 900, end: r, pct: 10 });
+    // Usage counts both sides: 50 → 90, then 0 → 10.
+    expect(s.hourly.reduce((a, v) => a + v, 0)).toBe(40 + 10);
+  });
+
   test("readings of an expired window are ignored and the next reset is inferred", () => {
     const r = local(2026, 6, 9, 6);
     const raw: RawSample[] = [

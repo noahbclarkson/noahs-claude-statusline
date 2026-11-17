@@ -6,13 +6,18 @@
 // Raw samples are noisy in one specific way: every open Claude Code session
 // reports the rate limits from its *own* last API response, so an idle session
 // keeps reporting an old, lower figure while a busy one reports the live one.
-// Usage inside one window can only grow, so a running max per window removes
-// the stale readings without discarding anything real.
+// Usage inside one window only grows, so a running max per window removes the
+// stale readings without discarding anything real. The exception is a manual
+// reset of the weekly limit: usage drops to 0 but resets_at stays the same, so
+// buildWindows splits a window wherever one session's own figure falls.
 
 import { DAY, HOUR, WEEK, addDays, dayOfWeek, dayStart, hourIndex, hourOfDay, isWeekendDow } from "./time";
 
-/** [ts, five_pct, five_resets_at, week_pct, week_resets_at] as stored in usage.db. */
-export type RawSample = [number, number | null, number | null, number | null, number | null];
+/**
+ * [ts, five_pct, five_resets_at, week_pct, week_resets_at, session] as stored in usage.db, where
+ * session is a small per-account number standing for the reading's session_id (null when unknown).
+ */
+export type RawSample = [number, number | null, number | null, number | null, number | null, (number | null)?];
 
 export interface Point {
   t: number;
@@ -66,6 +71,11 @@ export interface AccountSeries {
 const SPREAD_GAP = 3 * HOUR;
 /** resets_at is grouped to the nearest 15 minutes to absorb any jitter. */
 const RESET_ROUND = 900;
+/**
+ * After a manual reset, a session's first reading may lead the live figure by this many points
+ * and still count; further ahead, it is taken for a figure from before the reset.
+ */
+const NEW_SESSION_LEAD = 5;
 
 export function buildSeries(id: string, label: string, raw: RawSample[], now: number): AccountSeries {
   const samples = raw.filter((s) => s[0] <= now).sort((a, b) => a[0] - b[0]);
@@ -136,23 +146,17 @@ export function buildSeries(id: string, label: string, raw: RawSample[], now: nu
 }
 
 function buildWindows(samples: RawSample[]): WeekWindow[] {
-  const byEnd = new Map<number, Point[]>();
-  for (const [t, , , w, wr] of samples) {
+  const byEnd = new Map<number, Reading[]>();
+  for (const [t, , , w, wr, sid] of samples) {
     if (w == null || wr == null) continue;
     // A reset in the past is a session still showing an expired window.
     if (wr <= t || wr - t > WEEK + HOUR) continue;
     const end = Math.round(wr / RESET_ROUND) * RESET_ROUND;
-    let pts = byEnd.get(end);
-    if (!pts) byEnd.set(end, (pts = []));
-    pts.push({ t, pct: w });
+    let rs = byEnd.get(end);
+    if (!rs) byEnd.set(end, (rs = []));
+    rs.push({ t, pct: w, sid: sid ?? null });
   }
-  const windows: WeekWindow[] = [...byEnd.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([end, pts]) => {
-      let max = 0;
-      const points = pts.map((p) => ({ t: p.t, pct: (max = Math.max(max, p.pct)) }));
-      return { start: end - WEEK, end, points };
-    });
+  const windows = [...byEnd.entries()].sort((a, b) => a[0] - b[0]).flatMap(([end, rs]) => splitAtResets(end, rs));
   // If an account's weekly anchor ever moves, windows overlap; the newer one
   // can only start once the older one stops being observed.
   for (let i = 1; i < windows.length; i++) {
@@ -160,6 +164,56 @@ function buildWindows(samples: RawSample[]): WeekWindow[] {
     windows[i].start = Math.max(windows[i].start, prev[prev.length - 1].t);
   }
   return windows;
+}
+
+interface Reading {
+  t: number;
+  pct: number;
+  sid: number | null;
+}
+
+/**
+ * One resets_at's readings as one window, or several when the limit was reset by hand part way
+ * through (usage back to 0, resets_at unchanged). An idle session's stale figure is also lower
+ * than the live one, so a drop between readings proves nothing; but a session's *own* figure
+ * only ever falls at a reset (no other drop in ~15,000 readings over three accounts, Nov 2026).
+ * After a reset, a session last heard before it that repeats its old figure is stale and skipped;
+ * once its figure changes, it has heard from the API since. A new session counts too, unless its
+ * first figure looks like one from before the reset.
+ */
+function splitAtResets(end: number, readings: Reading[]): WeekWindow[] {
+  const out: WeekWindow[] = [];
+  let cur: WeekWindow = { start: end - WEEK, end, points: [] };
+  let max = 0;
+  /** The final figure of the window before the latest reset. */
+  let before = 0;
+  const last = new Map<number, Point>();
+  const stale = new Set<number>();
+  for (const r of readings) {
+    const prev = r.sid == null ? undefined : last.get(r.sid);
+    if (prev && r.pct < prev.pct - 0.5 && prev.t >= cur.start) {
+      cur.end = r.t;
+      out.push(cur);
+      cur = { start: r.t, end, points: [] };
+      before = max;
+      max = 0;
+      stale.clear();
+      for (const sid of last.keys()) if (sid !== r.sid) stale.add(sid);
+    } else if (r.sid != null && stale.has(r.sid)) {
+      if (prev && r.pct === prev.pct) continue;
+      stale.delete(r.sid);
+    } else if (r.sid != null && !prev && out.length && r.pct > max + NEW_SESSION_LEAD && r.pct <= before) {
+      // First heard after the reset (readings are logged at most every 5 minutes, so an idle
+      // session can go unrecorded) and well above everyone since it: a figure from before it.
+      last.set(r.sid, { t: cur.start - 1, pct: r.pct });
+      stale.add(r.sid);
+      continue;
+    }
+    if (r.sid != null) last.set(r.sid, { t: r.t, pct: r.pct });
+    cur.points.push({ t: r.t, pct: (max = Math.max(max, r.pct)) });
+  }
+  if (cur.points.length) out.push(cur);
+  return out;
 }
 
 function buildFive(samples: RawSample[]): FivePoint[] {

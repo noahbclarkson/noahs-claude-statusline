@@ -19,7 +19,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type { Account } from "./accounts";
 import { CONFIG } from "./config";
-import type { RawSample } from "./model/series";
+import type { StoredRow } from "./db";
 
 /** The Windows user profile holding the .claude* folders, or null when off. */
 export const WINDOWS_HOME: string | null = (() => {
@@ -55,15 +55,15 @@ export function snapshotWindowsDb(a: Account): string | null {
 }
 
 /** Raw rows from the Windows snapshot, oldest first; [] when off, missing or unreadable. */
-export function readWindowsRows(a: Account): RawSample[] {
+export function readWindowsRows(a: Account): StoredRow[] {
   try {
     const path = snapshotWindowsDb(a);
     if (!path) return [];
     const db = new Database(path, { readonly: true });
     try {
       return db
-        .query("SELECT ts, five_pct, five_resets_at, week_pct, week_resets_at FROM samples ORDER BY ts")
-        .values() as RawSample[];
+        .query("SELECT ts, five_pct, five_resets_at, week_pct, week_resets_at, session_id FROM samples ORDER BY ts")
+        .values() as StoredRow[];
     } finally {
       db.close();
     }

@@ -21,6 +21,7 @@ export function backtest(s: AccountSeries, cfg: ModelConfig, checkpoints = [1, 2
     const actual = w.points[w.points.length - 1].pct;
     for (const k of checkpoints) {
       const t = w.start + k * DAY;
+      if (t >= w.end) break; // a window cut short by a manual reset
       const ctx = makeCtx(s, t, cfg);
       const set = forecastAll(ctx);
       const now = pctAt(s, t);

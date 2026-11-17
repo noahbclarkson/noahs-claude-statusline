@@ -68,18 +68,26 @@ export function insertSamples(db: Database, rows: SampleRow[]): void {
  */
 export function readSamples(a: Account): RawSample[] {
   const rows = mergeRows(readLocalRows(a), readWindowsRows(a));
-  const out: RawSample[] = [];
-  let last: RawSample | undefined;
+  const out: StoredRow[] = [];
+  let last: StoredRow | undefined;
   for (const r of rows) {
     const same = last && r[1] === last[1] && r[2] === last[2] && r[3] === last[3] && r[4] === last[4];
     if (!same || r[0] - last![0] >= 1800) out.push((last = r));
   }
   const tail = rows[rows.length - 1];
   if (tail && out[out.length - 1] !== tail) out.push(tail);
-  return out;
+  // Session ids become small numbers: the analysis only needs to tell sessions apart.
+  const sids = new Map<string, number>();
+  return out.map(([t, f, fr, w, wr, sid]) => {
+    if (sid != null && !sids.has(sid)) sids.set(sid, sids.size);
+    return [t, f, fr, w, wr, sid == null ? null : sids.get(sid)!];
+  });
 }
 
-function readLocalRows(a: Account): RawSample[] {
+/** A usage.db row as the analysis reads it: RawSample with the session_id still a string. */
+export type StoredRow = [number, number | null, number | null, number | null, number | null, string | null];
+
+function readLocalRows(a: Account): StoredRow[] {
   if (!existsSync(dbPath(a))) return [];
   // Read-only: the dashboard renders from several log.ts processes at once,
   // and a reader has no reason to take the schema/journal-mode write locks.
@@ -87,19 +95,19 @@ function readLocalRows(a: Account): RawSample[] {
   try {
     db.exec("PRAGMA busy_timeout = 5000;");
     return db
-      .query("SELECT ts, five_pct, five_resets_at, week_pct, week_resets_at FROM samples ORDER BY ts")
-      .values() as RawSample[];
+      .query("SELECT ts, five_pct, five_resets_at, week_pct, week_resets_at, session_id FROM samples ORDER BY ts")
+      .values() as StoredRow[];
   } finally {
     db.close();
   }
 }
 
 /** Two ts-sorted row lists merged into one, dropping rows that are identical in every field. */
-export function mergeRows(a: RawSample[], b: RawSample[]): RawSample[] {
+export function mergeRows(a: StoredRow[], b: StoredRow[]): StoredRow[] {
   if (b.length === 0) return a;
   if (a.length === 0) return b;
   const seen = new Set<string>();
-  const out: RawSample[] = [];
+  const out: StoredRow[] = [];
   for (const r of [...a, ...b].sort((x, y) => x[0] - y[0])) {
     const key = r.join("|");
     if (seen.has(key)) continue;
